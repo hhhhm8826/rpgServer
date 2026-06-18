@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="DummyClient/DummyClient.csproj" />
+  <Project Path="GameServer.AppHost/GameServer.AppHost.csproj" />
+  <Project Path="GameServer.ServiceDefaults/GameServer.ServiceDefaults.csproj" />
+  <Project Path="GatewayServer/GatewayServer.csproj" />
+  <Project Path="Shared/Shared.csproj" />
+  <Project Path="WorldServer/WorldServer.csproj" />
+</Solution>

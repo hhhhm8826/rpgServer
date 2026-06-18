@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package game_server.protocol;
+
+option csharp_namespace = "GameServer.Shared.Protocol";
+
+import "Protocol/PacketStruct.proto";
+
+enum ServerResKind {
+  SERVER_RES_KIND_UNKNOWN = 0;
+  SERVER_RES_KIND_LOGIN = 1;
+  SERVER_RES_KIND_MOVE_NTY = 2;
+  SERVER_RES_KIND_AOI_DELTA = 3;
+  SERVER_RES_KIND_RELIABLE_EVENT = 4;
+  SERVER_RES_KIND_ERROR = 5;
+}
+
+// 서버 이벤트를 Gateway가 어떤 전달 정책으로 처리할지 명시합니다.
+enum ServerDeliveryPolicy {
+  // 순서와 전달을 우선합니다. 로그인, 에러, 입장/퇴장, 보상 등 누락되면 안 되는 이벤트에 사용합니다.
+  SERVER_DELIVERY_POLICY_RELIABLE = 0;
+
+  // 같은 관찰자와 객체 기준으로 최신값만 유지합니다. 이동, 전투 상태 스냅샷처럼 중간값 유실이 허용되는 이벤트에 사용합니다.
+  SERVER_DELIVERY_POLICY_LATEST_PER_ENTITY = 1;
+}
+
+//패킷을 보낼때 수신측이 바로 알 수 있게 Envelop 패턴 사용
+message ServerResEnvelope {
+  int64 sequence = 1;
+  ServerResKind kind = 2;
+  string session_id = 3;
+  int64 user_db_id = 4;
+  ServerDeliveryPolicy delivery_policy = 5;
+
+  oneof payload {
+    LoginRes login = 10;
+    MoveNty move = 11;
+    AoiDelta aoi_delta = 12;
+    ReliableEvent reliable_event = 13;
+    ErrorRes error = 14;
+  }
+}
+
+message LoginRes {
+  bool accepted = 1;
+  string session_id = 2;
+  ErrorCode error_code = 3;
+  WorldPosition spawn_position = 4;
+  string message = 5;
+}
+
+message MoveNty {
+  bool accepted = 1;
+  ErrorCode error_code = 2;
+  WorldPosition authoritative_position = 3;
+  string message = 4;
+}
+
+message ErrorRes {
+  ErrorCode code = 1;
+  string message = 2;
+}

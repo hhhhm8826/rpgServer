@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DummyClient Viewer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Segoe UI, Arial, sans-serif;
+      background: #101114;
+      color: #eceef2;
+    }
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+    #hud {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      z-index: 2;
+      background: rgba(16, 17, 20, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 12px 14px;
+      min-width: 280px;
+      line-height: 1.45;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+    }
+    #hud strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+    #hud .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      font-size: 12px;
+      color: #cfd4dc;
+      cursor: help;
+    }
+    #hud .row span:first-child {
+      border-bottom: 1px dotted rgba(207, 212, 220, 0.38);
+    }
+    #hud .row .value {
+      text-align: right;
+      white-space: nowrap;
+    }
+    #hud .row .value.ok {
+      color: #6ee7a8;
+      font-weight: 700;
+    }
+    #hud .row .value.bad {
+      color: #ff6b6b;
+      font-weight: 700;
+    }
+    #hud .row .value.warn {
+      color: #f4c86a;
+      font-weight: 700;
+    }
+    #hud .status {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      color: #f4c86a;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    #hud .status.ok {
+      color: #6ee7a8;
+    }
+    #hud .status.bad {
+      color: #ff8a8a;
+    }
+    #hud .status.warn {
+      color: #f4c86a;
+    }
+    #legend {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 2;
+      display: grid;
+      gap: 7px;
+      background: rgba(16, 17, 20, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: #d6dae2;
+    }
+    #legend span {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-right: 8px;
+      border-radius: 50%;
+      vertical-align: -1px;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background:
+        radial-gradient(circle at center, rgba(101, 214, 255, 0.08), transparent 34%),
+        #101114;
+    }
+    #completion {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      z-index: 3;
+      transform: translate(-50%, -50%);
+      display: none;
+      min-width: min(560px, calc(100vw - 48px));
+      padding: 28px 32px;
+      border: 1px solid rgba(110, 231, 168, 0.56);
+      border-radius: 8px;
+      background: rgba(16, 17, 20, 0.94);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+      text-align: center;
+    }
+    #completion.visible {
+      display: block;
+    }
+    #completion .title {
+      color: #6ee7a8;
+      font-size: 30px;
+      font-weight: 800;
+    }
+    #completion .message {
+      margin-top: 10px;
+      color: #d6dae2;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="hud"><strong>DummyClient Viewer</strong><div id="stats"></div></div>
+  <div id="legend">
+    <div><span style="background:#ffcc4d"></span>observer</div>
+    <div><span style="background:#65d6ff"></span>nearby dummy</div>
+  </div>
+  <div id="completion">
+    <div class="title">테스트 완료</div>
+    <div class="message" id="completion-message"></div>
+  </div>
+  <script>
+    const canvas = document.getElementById('view');
+    const ctx = canvas.getContext('2d');
+    const stats = document.getElementById('stats');
+    const completion = document.getElementById('completion');
+    const completionMessage = document.getElementById('completion-message');
+    const defaultIntervalMs = 200;
+    let snapshot = null;
+    let nearbyIds = new Set();
+    let scale = 4;
+    let drawRequested = false;
+    let lastStatsHtml = '';
+    let lastPollMs = 0;
+    let lastDrawMs = 0;
+
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      requestDraw();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    async function poll() {
+      let delayMs = snapshotIntervalMs(snapshot);
+      const startedAt = performance.now();
+      try {
+        const response = await fetch('/state', { cache: 'no-store' });
+        const next = await response.json();
+        lastPollMs = performance.now() - startedAt;
+        setSnapshot(next);
+        delayMs = snapshotIntervalMs(next);
+      } catch {
+        lastPollMs = performance.now() - startedAt;
+      } finally {
+        setTimeout(poll, delayMs);
+      }
+    }
+
+    function snapshotIntervalMs(value) {
+      const interval = Number(value?.renderIntervalMs ?? defaultIntervalMs);
+      return Math.max(defaultIntervalMs, Math.min(2000, interval));
+    }
+
+    function setSnapshot(next) {
+      snapshot = next;
+      nearbyIds = new Set((next?.entities ?? []).map(x => x.userDbId));
+      updateCompletion(next);
+      requestDraw();
+    }
+
+    function updateCompletion(value) {
+      const done = Boolean(value?.completed);
+      completion.classList.toggle('visible', done);
+      completionMessage.textContent = done ? (value?.completionMessage || 'DummyClient 테스트가 종료됐습니다.') : '';
+    }
+
+    function requestDraw() {
+      if (drawRequested) return;
+      drawRequested = true;
+      requestAnimationFrame(() => {
+        drawRequested = false;
+        draw();
+      });
+    }
+
+    function screenX(entity, observer) {
+      return window.innerWidth / 2 + (entity.x - observer.x) * scale;
+    }
+
+    function screenY(entity, observer) {
+      return window.innerHeight / 2 - (entity.y - observer.y) * scale;
+    }
+
+    function setScale(snapshot) {
+      const radius = Math.max(25, snapshot?.viewRadius ?? 70);
+      scale = Math.max(2.5, Math.min(8, Math.min(window.innerWidth, window.innerHeight) * 0.42 / radius));
+    }
+
+    function drawGrid(observer, cellSize) {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const step = cellSize * scale;
+      const ox = w / 2 - observer.x * scale;
+      const oy = h / 2 + observer.y * scale;
+      ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+      ctx.lineWidth = 1;
+      for (let x = ox % step; x < w; x += step) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let y = oy % step; y < h; y += step) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = 'rgba(101,214,255,0.26)';
+      ctx.beginPath();
+      ctx.moveTo(w / 2, 0);
+      ctx.lineTo(w / 2, h);
+      ctx.moveTo(0, h / 2);
+      ctx.lineTo(w, h / 2);
+      ctx.stroke();
+    }
+
+    function drawCurrentZone(observer, zone, cellSize) {
+      if (!zone) return;
+      const minX = zone.cellX * cellSize;
+      const maxX = minX + cellSize;
+      const minY = zone.cellY * cellSize;
+      const maxY = minY + cellSize;
+      const left = window.innerWidth / 2 + (minX - observer.x) * scale;
+      const right = window.innerWidth / 2 + (maxX - observer.x) * scale;
+      const top = window.innerHeight / 2 - (maxY - observer.y) * scale;
+      const bottom = window.innerHeight / 2 - (minY - observer.y) * scale;
+
+      ctx.fillStyle = 'rgba(255,204,77,0.07)';
+      ctx.strokeStyle = 'rgba(255,204,77,0.5)';
+      ctx.lineWidth = 2;
+      ctx.fillRect(left, top, right - left, bottom - top);
+      ctx.strokeRect(left, top, right - left, bottom - top);
+    }
+
+    function drawEntities(entities, observer) {
+      ctx.strokeStyle = '#101114';
+      ctx.lineWidth = 2;
+      ctx.fillStyle = '#65d6ff';
+      ctx.beginPath();
+      let hasPath = false;
+      for (const entity of entities) {
+        if (!entity.connected) continue;
+        const x = screenX(entity, observer);
+        const y = screenY(entity, observer);
+        if (x < -30 || x > window.innerWidth + 30 || y < -30 || y > window.innerHeight + 30) continue;
+        ctx.moveTo(x + 5, y);
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        hasPath = true;
+      }
+
+      if (!hasPath) return;
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function drawObserver(observer) {
+      const connected = observer.connected;
+      ctx.fillStyle = connected ? '#ffcc4d' : '#aeb6c2';
+      ctx.strokeStyle = '#101114';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(window.innerWidth / 2, window.innerHeight / 2, connected ? 10 : 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.strokeStyle = connected ? 'rgba(255,204,77,0.45)' : 'rgba(174,182,194,0.32)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(window.innerWidth / 2, window.innerHeight / 2, 18, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    function drawLabels(entities, observer, nearbyIds) {
+      ctx.font = '11px Segoe UI, Arial, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(236,238,242,0.8)';
+      let drawn = 0;
+      for (const e of entities) {
+        if (e.userDbId === observer.userDbId || !nearbyIds.has(e.userDbId) || drawn >= 12) continue;
+        const x = screenX(e, observer);
+        const y = screenY(e, observer);
+        if (x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) continue;
+        ctx.fillText(e.userDbId, x + 8, y);
+        drawn++;
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderErrorSummary(currentStats) {
+      const errors = currentStats?.errorSummaries ?? [];
+      if (!errors.length) return '';
+      return `
+        <div class="status bad">
+          ${errors.slice(0, 4).map(x => `${x.count} ${escapeHtml(x.key)}`).join('<br>')}
+        </div>
+      `;
+    }
+
+    function statRow(label, value, description, valueClass = '') {
+      return `
+        <div class="row" title="${escapeHtml(description)}">
+          <span>${escapeHtml(label)}</span>
+          <span class="value ${escapeHtml(valueClass)}">${escapeHtml(value)}</span>
+        </div>
+      `;
+    }
+
+    function formatDuration(seconds) {
+      const total = Math.max(0, Math.floor(Number(seconds ?? 0)));
+      const minutes = Math.floor(total / 60);
+      const remain = total % 60;
+      return `${minutes}:${String(remain).padStart(2, '0')}`;
+    }
+
+    function formatProgress(value) {
+      const elapsed = formatDuration(value?.elapsedSec ?? 0);
+      const durationSec = Number(value?.durationSec ?? 0);
+      if (durationSec <= 0) return elapsed;
+      return `${elapsed} / ${formatDuration(durationSec)}`;
+    }
+
+    function stateInfo(value) {
+      if (value?.completed) {
+        return {
+          text: '완료',
+          className: 'ok',
+          description: 'DummyClient 테스트가 종료된 상태입니다.'
+        };
+      }
+
+      const s = value?.stats;
+      if (!value?.observer) {
+        return {
+          text: '대기',
+          className: 'warn',
+          description: '첫 번째 더미의 LoginRes accepted를 기다리는 상태입니다.'
+        };
+      }
+
+      if (!value.observer.connected) {
+        return {
+          text: '끊김',
+          className: 'bad',
+          description: '관찰자 TCP 세션이 종료된 상태입니다.'
+        };
+      }
+
+      if ((s?.errors ?? 0) > 0 || (s?.loginTimeouts ?? 0) > 0) {
+        return {
+          text: '문제',
+          className: 'bad',
+          description: 'DummyClient 오류 또는 로그인 타임아웃이 발생한 상태입니다.'
+        };
+      }
+
+      return {
+        text: '정상',
+        className: 'ok',
+        description: '관찰자 연결이 유지되고 오류 없이 테스트가 진행 중입니다.'
+      };
+    }
+
+    function formatZone(zone) {
+      if (!zone) return '-';
+      return `${zone.mapId}:${zone.cellX},${zone.cellY}`;
+    }
+
+    function updateStats(html) {
+      if (html === lastStatsHtml) return;
+      stats.innerHTML = html;
+      lastStatsHtml = html;
+    }
+
+    function draw() {
+      const drawStartedAt = performance.now();
+      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      if (!snapshot || !snapshot.observer) {
+        const s = snapshot?.stats;
+        const state = stateInfo(snapshot);
+        updateStats(`
+          ${statRow('state', state.text, state.description, state.className)}
+          ${statRow('time', formatProgress(snapshot), 'DummyClient 테스트 경과 시간 / 설정된 전체 실행 시간입니다.')}
+          ${statRow('active', s?.connected ?? 0, '현재 TCP 연결이 유지 중인 더미 수입니다.')}
+          ${statRow('peak', s?.peakConnected ?? 0, '이번 테스트에서 동시에 연결됐던 최대 더미 수입니다.')}
+          ${statRow('accepted', s?.loginAccepted ?? 0, 'LoginRes accepted를 받은 누적 로그인 성공 수입니다.')}
+          ${statRow('loginAttempts', s?.loginAttempts ?? 0, 'DummyClient가 서버에 보낸 로그인 시도 누적 수입니다.')}
+          ${statRow('loginRejected', s?.loginRejected ?? 0, '서버가 재시도를 유도하거나 거절한 로그인 누적 수입니다.')}
+          ${statRow('loginTimeouts', s?.loginTimeouts ?? 0, 'LoginRes를 제한 시간 안에 받지 못한 누적 수입니다.')}
+          ${statRow('errors', s?.errors ?? 0, 'DummyClient 예외 또는 서버 Error 패킷 누적 수입니다.')}
+          <div class="status ${state.className}">${escapeHtml(s?.lastStatus ?? 'Waiting for first accepted LoginRes.')}</div>
+          ${renderErrorSummary(s)}
+        `);
+        lastDrawMs = performance.now() - drawStartedAt;
+        return;
+      }
+
+      setScale(snapshot);
+      const observer = snapshot.observer;
+      drawGrid(observer, snapshot.cellSize);
+      drawCurrentZone(observer, snapshot.currentZone, snapshot.cellSize);
+
+      ctx.strokeStyle = observer.connected ? 'rgba(255,204,77,0.85)' : 'rgba(174,182,194,0.55)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(window.innerWidth / 2, window.innerHeight / 2, snapshot.viewRadius * scale, 0, Math.PI * 2);
+      ctx.stroke();
+
+      drawEntities(snapshot.entities, observer);
+      drawLabels(snapshot.entities, observer, nearbyIds);
+      drawObserver(observer);
+
+      const state = stateInfo(snapshot);
+
+      updateStats(`
+        ${statRow('observer', observer.userDbId, '현재 화면 중심 기준으로 사용하는 첫 번째 더미의 UserDbId입니다.')}
+        ${statRow('state', state.text, state.description, state.className)}
+        ${statRow('time', formatProgress(snapshot), 'DummyClient 테스트 경과 시간 / 설정된 전체 실행 시간입니다.')}
+        ${statRow('zone', formatZone(snapshot.currentZone), '관찰자 좌표를 50m x 50m Zone 셀 기준으로 나눈 현재 Zone입니다. 노란 사각형으로도 표시됩니다.')}
+        ${statRow('active', snapshot.stats.connected, '현재 TCP 연결이 유지 중인 더미 수입니다.')}
+        ${statRow('peak', snapshot.stats.peakConnected, '이번 테스트에서 동시에 연결됐던 최대 더미 수입니다.')}
+        ${statRow('accepted', snapshot.stats.loginAccepted, 'LoginRes accepted를 받은 누적 로그인 성공 수입니다.')}
+        ${statRow('nearby', snapshot.nearbyCount, '관찰자 AOI 반경 안에 있어 현재 Viewer가 그리는 주변 유저 수입니다.')}
+        ${statRow('loginAttempts', snapshot.stats.loginAttempts, 'DummyClient가 서버에 보낸 로그인 시도 누적 수입니다.')}
+        ${statRow('loginTimeouts', snapshot.stats.loginTimeouts, 'LoginRes를 제한 시간 안에 받지 못한 누적 수입니다.')}
+        ${statRow('move nty', `${snapshot.stats.moveNty}/${snapshot.stats.sentMoves}`, '서버가 권위 위치로 내려준 MoveNty 수 / DummyClient가 보낸 MoveReq 수입니다.')}
+        ${statRow('aoi', snapshot.stats.aoiDeltas, '관찰자가 수신한 AOI Delta 누적 수입니다.')}
+        ${statRow('errors', snapshot.stats.errors, 'DummyClient 예외 또는 서버 Error 패킷 누적 수입니다.')}
+        ${statRow('viewer', `${snapshotIntervalMs(snapshot)}ms / draw ${lastDrawMs.toFixed(1)}ms / net ${lastPollMs.toFixed(1)}ms`, 'Viewer 폴링 주기 / Canvas draw 소요 시간 / HTTP state 수신 소요 시간입니다.')}
+        ${renderErrorSummary(snapshot.stats)}
+        ${observer.connected ? '' : '<div class="status bad">observer 연결이 종료됐습니다. 새 LoginRes accepted를 기다립니다.</div>'}
+      `);
+      lastDrawMs = performance.now() - drawStartedAt;
+    }
+
+    poll();
+    requestDraw();
+  </script>
+</body>
+</html>

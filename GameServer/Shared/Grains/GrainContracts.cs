@@ -1,0 +1,182 @@
+using GameServer.Shared.World;
+using ProtocolErrorCode = GameServer.Shared.Protocol.ErrorCode;
+using ProtocolServerDeliveryPolicy = GameServer.Shared.Protocol.ServerDeliveryPolicy;
+using Orleans.Concurrency;
+using Orleans;
+
+namespace GameServer.Shared.Grains;
+
+public interface IUserGrain : IGrainWithIntegerKey
+{
+    Task<LoginResult> LoginAsync(LoginCommand command);
+
+    Task<MoveResult> MoveAsync(MoveCommand command);
+
+    Task LogoutAsync(LogoutCommand command);
+
+    Task AckServerEventAsync(string eventId);
+}
+
+public interface IZoneGrain : IGrainWithStringKey
+{
+    Task EnterAsync(EntitySnapshot entity);
+
+    [OneWay]
+    Task MoveAsync(EntitySnapshot entity);
+
+    Task LeaveAsync(long entityId);
+}
+
+[GenerateSerializer]
+public enum GatewayServerEventKind
+{
+    Unknown = 0,
+    AoiDelta = 1,
+    ReliableEvent = 2,
+    Error = 3
+}
+
+[GenerateSerializer]
+public sealed class GatewayServerEvent
+{
+    [Id(0)]
+    public string SessionId { get; set; } = "";
+
+    [Id(1)]
+    public long UserDbId { get; set; }
+
+    [Id(2)]
+    public GatewayServerEventKind Kind { get; set; }
+
+    [Id(3)]
+    public ZoneDelta? AoiDelta { get; set; }
+
+    [Id(4)]
+    public ReliableGameEvent? ReliableEvent { get; set; }
+
+    [Id(5)]
+    public GatewayError? Error { get; set; }
+}
+
+[GenerateSerializer]
+public sealed class ZoneDelta
+{
+    [Id(0)]
+    public string MapId { get; set; } = "default";
+
+    [Id(1)]
+    public int ZoneX { get; set; }
+
+    [Id(2)]
+    public int ZoneY { get; set; }
+
+    [Id(3)]
+    public long Sequence { get; set; }
+
+    [Id(4)]
+    public List<EntitySnapshot> Upserts { get; set; } = [];
+
+    [Id(5)]
+    public List<long> Removes { get; set; } = [];
+
+    [Id(6)]
+    public ProtocolServerDeliveryPolicy DeliveryPolicy { get; set; } = ProtocolServerDeliveryPolicy.Reliable;
+}
+
+[GenerateSerializer]
+public sealed class ReliableGameEvent
+{
+    [Id(0)]
+    public string EventId { get; set; } = "";
+
+    [Id(1)]
+    public string EventType { get; set; } = "";
+
+    [Id(2)]
+    public string PayloadJson { get; set; } = "";
+}
+
+[GenerateSerializer]
+public sealed class GatewayError
+{
+    [Id(0)]
+    public ProtocolErrorCode Code { get; set; }
+
+    [Id(1)]
+    public string Message { get; set; } = "";
+}
+
+[GenerateSerializer]
+public sealed class LoginCommand
+{
+    [Id(0)]
+    public long UserDbId { get; set; }
+
+    [Id(1)]
+    public string SessionId { get; set; } = "";
+
+    [Id(2)]
+    public string GatewayId { get; set; } = "";
+
+    [Id(3)]
+    public WorldPosition SpawnPosition { get; set; } = new();
+
+}
+
+[GenerateSerializer]
+public sealed class LoginResult
+{
+    [Id(0)]
+    public bool Accepted { get; set; }
+
+    [Id(1)]
+    public ProtocolErrorCode ErrorCode { get; set; }
+
+    [Id(2)]
+    public WorldPosition Position { get; set; } = new();
+
+    [Id(3)]
+    public string Message { get; set; } = "";
+}
+
+[GenerateSerializer]
+public sealed class MoveCommand
+{
+    [Id(0)]
+    public long UserDbId { get; set; }
+
+    [Id(1)]
+    public string SessionId { get; set; } = "";
+
+    [Id(2)]
+    public WorldPosition Position { get; set; } = new();
+}
+
+[GenerateSerializer]
+public sealed class MoveResult
+{
+    [Id(0)]
+    public bool Accepted { get; set; }
+
+    [Id(1)]
+    public ProtocolErrorCode ErrorCode { get; set; }
+
+    [Id(2)]
+    public WorldPosition AuthoritativePosition { get; set; } = new();
+
+    [Id(3)]
+    public string Message { get; set; } = "";
+}
+
+[GenerateSerializer]
+public sealed class LogoutCommand
+{
+    [Id(0)]
+    public long UserDbId { get; set; }
+
+    [Id(1)]
+    public string SessionId { get; set; } = "";
+
+    [Id(2)]
+    public string Reason { get; set; } = "";
+}

@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package game_server.protocol;
+
+option csharp_namespace = "GameServer.Shared.Protocol";
+
+import "Protocol/PacketStruct.proto";
+
+enum ClientReqKind {
+  CLIENT_REQ_KIND_UNKNOWN = 0;
+  CLIENT_REQ_KIND_LOGIN = 1;
+  CLIENT_REQ_KIND_MOVE = 2;
+  CLIENT_REQ_KIND_LOGOUT = 3;
+  CLIENT_REQ_KIND_ACK = 4;
+}
+
+//패킷을 보낼때 수신측이 바로 알 수 있게 Envelop 패턴 사용
+message ClientReqEnvelope {
+  int64 sequence = 1;
+  ClientReqKind kind = 2;
+
+  oneof payload {
+    LoginReq login = 10;
+    MoveReq move = 11;
+    LogoutReq logout = 12;
+    AckReq ack = 13;
+  }
+}
+
+message LoginReq {
+  int64 user_db_id = 1;
+  string token = 2;
+}
+
+message MoveReq {
+  WorldPosition position = 1;
+}
+
+message LogoutReq {
+  string reason = 1;
+}
+
+message AckReq {
+  string event_id = 1;
+}

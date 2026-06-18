@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package game_server.protocol;
+
+option csharp_namespace = "GameServer.Shared.Protocol";
+
+enum EntityKind {
+  ENTITY_KIND_UNKNOWN = 0;
+  ENTITY_KIND_USER = 1;
+  ENTITY_KIND_MONSTER = 2;
+  ENTITY_KIND_DROP_ITEM = 3;
+}
+
+// 서버와 클라이언트가 공통으로 사용하는 에러 사유 코드입니다.
+// C# 생성 코드와 원본 proto를 함께 찾기 쉽도록 enum value는 PascalCase로 유지합니다.
+enum ErrorCode {
+  // 성공 또는 에러 없음.
+  None = 0;
+
+  // 분류되지 않은 알 수 없는 오류.
+  Unknown = 1;
+
+  // 1000번대: 패킷 순서, 지원하지 않는 패킷 등 프로토콜 오류
+  // 첫 패킷이 LoginReq가 아니어서 연결을 받아들일 수 없음.
+  ProtocolLoginRequired = 1001;
+
+  // 현재 서버가 처리하지 않는 패킷 종류.
+  ProtocolUnsupportedPacket = 1002;
+
+  // 1100번대: 필수 값 누락, 잘못된 식별자 등 요청 검증 오류
+  // UserDbId가 0 이하이거나 Grain key와 일치하지 않음.
+  ValidationInvalidUserDbId = 1101;
+
+  // 2000번대: 로그인, 세션 소유권, 중복 접속 등 접속 상태 오류
+  // Gateway의 동시 로그인 처리 슬롯이 가득 찼으며 클라이언트 재시도 필요.
+  LoginServerBusyRetry = 2001;
+
+  // 같은 UserDbId의 살아있는 세션이 이미 존재함.
+  LoginDuplicate = 2002;
+
+  // 로그인은 확정됐지만 Zone 입장 또는 AOI 초기화 단계가 실패해 세션을 닫아야 함.
+  LoginPresenceInitFailed = 2003;
+
+  // 요청한 세션이 UserGrain의 현재 활성 세션이 아님.
+  SessionNotActive = 2101;
+
+  // 3000번대: 월드, 이동, 컨텐츠 처리 중 거절된 요청
+  // 월드 이동 요청이 서버 권한 검증 또는 월드 처리 정책에 의해 거절됨.
+  WorldMoveRejected = 3001;
+
+  // 9000번대: 서버 내부 오류 또는 예외성 실패
+  // 서버 내부 예외 또는 미분류 서버 오류.
+  InternalServerError = 9001;
+}
+
+message WorldPosition {
+  string map_id = 1;
+  float x = 2;
+  float y = 3;
+  float z = 4;
+}
+
+message EntitySnapshot {
+  int64 entity_id = 1;
+  EntityKind kind = 2;
+  string display_name = 3;
+  WorldPosition position = 4;
+  int64 version = 5;
+}
+
+message AoiDelta {
+  reserved 7;
+  reserved "is_movement";
+
+  string map_id = 1;
+  int32 zone_x = 2;
+  int32 zone_y = 3;
+  int64 sequence = 4;
+  repeated EntitySnapshot upserts = 5;
+  repeated int64 removes = 6;
+}
+
+message ReliableEvent {
+  string event_id = 1;
+  string event_type = 2;
+  string payload_json = 3;
+}

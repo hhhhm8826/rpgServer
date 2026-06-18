@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="680" viewBox="0 0 1120 680" role="img" aria-labelledby="title desc">
+  <title id="title">Login process</title>
+  <desc id="desc">DummyClient login request through GatewayServer, Redis session store, Orleans UserGrain, Redis and DynamoDB state recovery, subscription setup, and failure close path.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#0f172a" flood-opacity="0.18"/>
+    </filter>
+    <style>
+      .bg { fill: #f8fafc; }
+      .lane { fill: #eef2f7; stroke: #cbd5e1; stroke-width: 1; }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.3; rx: 8; filter: url(#shadow); }
+      .gateway { fill: #e0f2fe; stroke: #0284c7; }
+      .world { fill: #ecfdf5; stroke: #059669; }
+      .redis { fill: #fff1f2; stroke: #e11d48; }
+      .dynamo { fill: #eef2ff; stroke: #4f46e5; }
+      .note { fill: #fffbeb; stroke: #d97706; }
+      .title { font: 700 20px Segoe UI, Arial, sans-serif; fill: #0f172a; }
+      .lane-title { font: 700 14px Segoe UI, Arial, sans-serif; fill: #334155; }
+      .text { font: 600 13px Segoe UI, Arial, sans-serif; fill: #0f172a; }
+      .small { font: 12px Segoe UI, Arial, sans-serif; fill: #334155; }
+      .tiny { font: 11px Segoe UI, Arial, sans-serif; fill: #475569; }
+      .arrow { stroke: #334155; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 6 5; }
+      .fail { stroke: #dc2626; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1120" height="680"/>
+  <text class="title" x="40" y="42">Login Process</text>
+  <text class="small" x="40" y="66">TCP Gateway authenticates session ownership, Orleans UserGrain owns user state, subscriptions are prepared after accepted LoginRes.</text>
+
+  <rect class="lane" x="40" y="96" width="160" height="530" rx="10"/>
+  <rect class="lane" x="230" y="96" width="250" height="530" rx="10"/>
+  <rect class="lane" x="510" y="96" width="260" height="530" rx="10"/>
+  <rect class="lane" x="800" y="96" width="280" height="530" rx="10"/>
+
+  <text class="lane-title" x="78" y="124">Client</text>
+  <text class="lane-title" x="294" y="124">GatewayServer</text>
+  <text class="lane-title" x="576" y="124">WorldServer</text>
+  <text class="lane-title" x="890" y="124">Storage / EventBus</text>
+
+  <rect class="box" x="62" y="160" width="116" height="54"/>
+  <text class="text" x="87" y="184">LoginReq</text>
+  <text class="tiny" x="78" y="202">userDbId</text>
+
+  <rect class="box gateway" x="260" y="145" width="190" height="84"/>
+  <text class="text" x="289" y="174">TCP accept</text>
+  <text class="small" x="286" y="194">validate first packet</text>
+  <text class="tiny" x="286" y="212">login packet required</text>
+
+  <line class="arrow" x1="178" y1="187" x2="260" y2="187"/>
+
+  <rect class="box gateway" x="260" y="258" width="190" height="80"/>
+  <text class="text" x="282" y="286">Login limit</text>
+  <text class="small" x="282" y="306">32 concurrent slots</text>
+  <text class="tiny" x="282" y="324">busy: server-busy-retry</text>
+
+  <line class="arrow" x1="355" y1="229" x2="355" y2="258"/>
+
+  <rect class="box redis" x="826" y="156" width="224" height="76"/>
+  <text class="text" x="864" y="184">Redis Session</text>
+  <text class="small" x="848" y="204">TryRegister userDbId</text>
+  <text class="tiny" x="848" y="222">duplicate-login if exists</text>
+
+  <line class="arrow" x1="450" y1="298" x2="826" y2="194"/>
+
+  <rect class="box world" x="540" y="272" width="200" height="92"/>
+  <text class="text" x="574" y="300">UserGrain.Login</text>
+  <text class="small" x="562" y="320">Orleans direct call</text>
+  <text class="tiny" x="562" y="340">set online/session/gateway</text>
+
+  <line class="arrow" x1="450" y1="318" x2="540" y2="318"/>
+
+  <rect class="box redis" x="826" y="276" width="224" height="74"/>
+  <text class="text" x="872" y="304">Redis State</text>
+  <text class="small" x="850" y="324">read-through first</text>
+  <text class="tiny" x="850" y="342">hot recovery cache</text>
+
+  <rect class="box dynamo" x="826" y="382" width="224" height="74"/>
+  <text class="text" x="864" y="410">DynamoDB</text>
+  <text class="small" x="850" y="430">fallback on Redis miss</text>
+  <text class="tiny" x="850" y="448">RpgUserState</text>
+
+  <line class="arrow" x1="740" y1="312" x2="826" y2="312"/>
+  <line class="arrow dash" x1="938" y1="350" x2="938" y2="382"/>
+
+  <rect class="box world" x="540" y="402" width="200" height="84"/>
+  <text class="text" x="574" y="430">Presence init</text>
+  <text class="small" x="562" y="450">enter current Zone</text>
+  <text class="tiny" x="562" y="468">async after state update</text>
+
+  <line class="arrow" x1="640" y1="364" x2="640" y2="402"/>
+
+  <rect class="box gateway" x="260" y="402" width="190" height="84"/>
+  <text class="text" x="306" y="430">LoginRes</text>
+  <text class="small" x="284" y="450">accepted + sessionId</text>
+  <text class="tiny" x="284" y="468">spawn position</text>
+
+  <line class="arrow" x1="540" y1="438" x2="450" y2="438"/>
+  <line class="arrow" x1="260" y1="438" x2="178" y2="438"/>
+
+  <rect class="box gateway" x="260" y="522" width="190" height="76"/>
+  <text class="text" x="284" y="550">Subscription setup</text>
+  <text class="small" x="282" y="570">user channel + 3x3 zones</text>
+  <text class="tiny" x="282" y="588">single-writer manager</text>
+
+  <line class="arrow" x1="355" y1="486" x2="355" y2="522"/>
+
+  <rect class="box redis" x="826" y="520" width="224" height="78"/>
+  <text class="text" x="856" y="548">Redis EventBus</text>
+  <text class="small" x="848" y="568">gs:user / gs:{mapId}:zone</text>
+  <text class="tiny" x="848" y="586">Sharded Pub/Sub</text>
+
+  <line class="arrow" x1="450" y1="560" x2="826" y2="560"/>
+
+  <rect class="box note" x="520" y="535" width="240" height="72"/>
+  <text class="text" x="548" y="562">Failure path</text>
+  <text class="small" x="542" y="582">presence-init-failed</text>
+  <text class="tiny" x="542" y="600">Gateway sends error and closes session</text>
+
+  <line class="arrow fail dash" x1="640" y1="486" x2="640" y2="535"/>
+</svg>

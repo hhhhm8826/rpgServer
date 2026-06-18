@@ -1,0 +1,17 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.2.4">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>751d4ef7-79c1-4b07-a47d-215dc50a5bc1</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MessagePack" Version="2.5.302" />
+    <ProjectReference Include="..\GatewayServer\GatewayServer.csproj" />
+    <ProjectReference Include="..\WorldServer\WorldServer.csproj" />
+  </ItemGroup>
+
+</Project>
