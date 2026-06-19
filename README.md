@@ -98,6 +98,11 @@ Gateway 내부의 user/zone 구독 ref count와 `zone -> session` 인덱스는 s
 
 Zone 이벤트는 `ServerDeliveryPolicy`에 따라 처리 경로가 나뉩니다. `Reliable` 이벤트는 누락 없이 전달하고, `LatestPerEntity` 이벤트는 Gateway의 Zone hash partition에서 최신값으로 병합한 뒤 session hash partition에서 관찰자와 객체 기준으로 다시 병합해 tick 단위로 전송합니다.
 
+현재 남아있는 가장 강한 병목은 `GatewayAoiAggregator`의 session AOI command queue입니다.
+
+이 단계에서 Zone AOI가 관찰자 세션별 필터링 작업으로 fan-out되기 때문에, 좁은 지역에 많은 유저가 몰리면 queue 지연이 가장 먼저 커집니다. 현재 로컬 기본값은 `SessionAoiPartitionCount=16`으로 두어 병렬성을 확보하지만, 
+후술할 1000명 테스트에서 단일 PC를 사용할 경우 순간적으로 큰 지연이 발생합니다. 따라서 프로덕션까지 가기 위해서 개선해야할 부분입니다.
+
 <br>
 
 ## 주요 설정 옵션
@@ -113,11 +118,11 @@ Zone 이벤트는 `ServerDeliveryPolicy`에 따라 처리 경로가 나뉩니다
 | `GatewayHeartbeatTTLSec` | 3 | 죽은 Gateway 판정 TTL |
 | `EventQueueCapacity` | 4096 | Redis EventBus 수신 큐 용량 |
 | `EventQueueWorkerCount` | 4 | Gateway 이벤트 큐 worker 수 |
-| `LatestEventTickMs` | 200 | latest-only 이벤트 병합 및 전송 기준 tick |
+| `LatestEventTickMs` | 100 | latest-only 이벤트 병합 및 전송 기준 tick |
 | `LatestEventQueueCapacity` | 4096 | Gateway가 보관할 latest-only Zone 버퍼 최대 수 |
 | `LatestEventPartitionCount` | 4 | latest-only Zone 이벤트 hash partition 수 |
 | `LatestEventProcessingBudgetMs` | 100 | Gateway 전체 latest-only Zone tick 처리 시간 예산. Zone partition 수로 나눠 적용 |
-| `SessionAoiPartitionCount` | 4 | 세션별 AOI 병합/전송 hash partition 수 |
+| `SessionAoiPartitionCount` | 16 | 세션별 AOI 병합/전송 hash partition 수 |
 | `SessionAoiTickMs` | 100 | 세션별 pending AOI 전송 tick |
 | `SessionAoiQueueCapacity` | 4096 | 세션 AOI partition별 입력 큐 용량 |
 | `SessionAoiSendConcurrency` | 32 | latest-only AOI 전송 동시 실행 제한 |

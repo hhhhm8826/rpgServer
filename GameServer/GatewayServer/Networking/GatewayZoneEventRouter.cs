@@ -382,6 +382,7 @@ public sealed class GatewayZoneEventRouter : BackgroundService
                 Sequence = _sequence
             };
             delta.Upserts.AddRange(_upserts.Values.Select(x => x.Clone()));
+
             foreach (var remove in _removes)
             {
                 delta.Removes.Add(remove.Key);

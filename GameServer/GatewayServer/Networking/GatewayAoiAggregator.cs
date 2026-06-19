@@ -27,13 +27,13 @@ public sealed class GatewayAoiAggregator : BackgroundService
             .ToArray();
     }
 
-    public Task EnqueueLatestZoneAsync(
+    internal Task EnqueueLatestZoneAsync(
         ServerResEnvelope envelope,
         IReadOnlyList<GatewaySession> sessions,
         CancellationToken cancellationToken = default)
         => EnqueueZoneBatchAsync(SessionAoiCommandKind.LatestBatch, envelope, sessions, cancellationToken);
 
-    public Task EnqueueReliableZoneAsync(
+    internal Task EnqueueReliableZoneAsync(
         ServerResEnvelope envelope,
         IReadOnlyList<GatewaySession> sessions,
         CancellationToken cancellationToken = default)
@@ -76,7 +76,13 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 continue;
             }
 
-            var command = new SessionAoiCommand(kind, envelope, partitionSessions.ToArray(), "", null);
+            var command = new SessionAoiCommand(
+                kind,
+                envelope,
+                partitionSessions.ToArray(),
+                "",
+                null);
+
             await _partitions[i].EnqueueAsync(command, cancellationToken);
         }
     }
@@ -89,6 +95,7 @@ public sealed class GatewayAoiAggregator : BackgroundService
         private readonly GatewayTcpTraceLog _traceLog;
         private readonly GatewayOptions _options;
         private readonly ILogger _logger;
+        // 현재 가장 큰 AOI 병목 지점. Latest/Reliable/Flush 명령이 여기서 세션별 필터링 작업으로 fan-out됨.
         private readonly Channel<SessionAoiCommand> _commands;
         // 관찰자 세션별로 1 tick 1 AOI packet이 되도록 최신 delta를 병합한다.
         private readonly Dictionary<string, PendingAoiDelta> _pendingBySession = new(StringComparer.Ordinal);
@@ -807,6 +814,7 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 Sequence = _sequence
             };
             delta.Upserts.AddRange(_upserts.Values.Select(x => x.Clone()));
+
             foreach (var remove in _removes)
             {
                 delta.Removes.Add(remove.Key);

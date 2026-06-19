@@ -114,6 +114,21 @@ internal static class DummyClientRunner
             var directionX = 0f;
             var directionY = 0f;
             var moveStopwatch = Stopwatch.StartNew();
+            var movePosition = new WorldPosition
+            {
+                MapId = options.MapId,
+                X = position.X,
+                Y = position.Y,
+                Z = position.Z
+            };
+            var moveEnvelope = new ClientReqEnvelope
+            {
+                Kind = ClientReqKind.Move,
+                Move = new MoveReq
+                {
+                    Position = movePosition
+                }
+            };
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -138,23 +153,13 @@ internal static class DummyClientRunner
                 moveStopwatch.Restart();
                 var distance = MoveSpeedMetersPerSecond * elapsedSeconds;
 
-                position = new WorldPosition
-                {
-                    MapId = options.MapId,
-                    X = position.X + directionX * distance,
-                    Y = position.Y + directionY * distance,
-                    Z = 0
-                };
+                // DummyClient는 송신 완료 후 다음 tick에서만 갱신하므로 protobuf 객체를 재사용해도 안전함
+                movePosition.X += directionX * distance;
+                movePosition.Y += directionY * distance;
+                movePosition.Z = 0;
+                moveEnvelope.Sequence = sequence++;
 
-                await ProtobufPacketCodec.WriteAsync(stream, new ClientReqEnvelope
-                {
-                    Sequence = sequence++,
-                    Kind = ClientReqKind.Move,
-                    Move = new MoveReq
-                    {
-                        Position = position
-                    }
-                }, cancellationToken);
+                await ProtobufPacketCodec.WriteAsync(stream, moveEnvelope, cancellationToken);
 
                 stats.IncrementSentMoves();
             }

@@ -279,7 +279,10 @@ public sealed class GatewaySubscriptionManager : BackgroundService
                 AoiDelta = delta.ToPacketAoiDelta()
             };
 
-            await _aoiAggregator.EnqueueReliableZoneAsync(envelope, [session], cancellationToken);
+            await _aoiAggregator.EnqueueReliableZoneAsync(
+                envelope,
+                [session],
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
