@@ -456,9 +456,21 @@
 
       ctx.strokeStyle = observer.connected ? 'rgba(255,204,77,0.85)' : 'rgba(174,182,194,0.55)';
       ctx.lineWidth = 2;
+      ctx.setLineDash([]);
       ctx.beginPath();
       ctx.arc(window.innerWidth / 2, window.innerHeight / 2, snapshot.viewRadius * scale, 0, Math.PI * 2);
       ctx.stroke();
+
+      const exitRadius = Number(snapshot.viewExitRadius ?? snapshot.viewRadius);
+      if (exitRadius > snapshot.viewRadius) {
+        ctx.strokeStyle = 'rgba(255,204,77,0.42)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 7]);
+        ctx.beginPath();
+        ctx.arc(window.innerWidth / 2, window.innerHeight / 2, exitRadius * scale, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       drawEntities(snapshot.entities, observer);
       drawLabels(snapshot.entities, observer, nearbyIds);
@@ -475,6 +487,7 @@
         ${statRow('peak', snapshot.stats.peakConnected, '이번 테스트에서 동시에 연결됐던 최대 더미 수입니다.')}
         ${statRow('accepted', snapshot.stats.loginAccepted, 'LoginRes accepted를 받은 누적 로그인 성공 수입니다.')}
         ${statRow('nearby', snapshot.nearbyCount, '관찰자 AOI 반경 안에 있어 현재 Viewer가 그리는 주변 유저 수입니다.')}
+        ${statRow('aoi radius', `${snapshot.viewRadius}m / ${exitRadius}m`, '실선은 서버 AOI 진입 반경, 점선은 서버가 경계 흔들림을 줄이기 위해 유지하는 이탈 반경입니다.')}
         ${statRow('loginAttempts', snapshot.stats.loginAttempts, 'DummyClient가 서버에 보낸 로그인 시도 누적 수입니다.')}
         ${statRow('loginTimeouts', snapshot.stats.loginTimeouts, 'LoginRes를 제한 시간 안에 받지 못한 누적 수입니다.')}
         ${statRow('move nty', `${snapshot.stats.moveNty}/${snapshot.stats.sentMoves}`, '서버가 권위 위치로 내려준 MoveNty 수 / DummyClient가 보낸 MoveReq 수입니다.')}

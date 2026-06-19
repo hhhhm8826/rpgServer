@@ -24,6 +24,8 @@ public interface IZoneGrain : IGrainWithStringKey
     [OneWay]
     Task MoveAsync(EntitySnapshot entity);
 
+    Task TransferOutAsync(EntitySnapshot entity);
+
     Task LeaveAsync(long entityId);
 }
 

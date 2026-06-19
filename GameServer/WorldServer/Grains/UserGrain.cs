@@ -216,17 +216,17 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
 
         var newZone = ZoneMath.FromPosition(State.Position);
         var newZoneKey = newZone.ToKey();
-        var zoneChanged = string.IsNullOrWhiteSpace(oldZoneKey) || oldZoneKey != newZoneKey;
 
-        // Zone 변경 시에만 Leave/Enter를 호출하고 같은 Zone 이동은 Move만 전달함
+        // Zone 이동은 객체 제거가 아니므로 old zone remove를 발행하지 않음
         if (string.IsNullOrWhiteSpace(oldZoneKey))
         {
             await GrainFactory.GetGrain<IZoneGrain>(newZoneKey).EnterAsync(ToSnapshot());
         }
         else if (oldZoneKey != newZoneKey)
         {
-            await GrainFactory.GetGrain<IZoneGrain>(oldZoneKey).LeaveAsync(State.UserDbId);
-            await GrainFactory.GetGrain<IZoneGrain>(newZoneKey).EnterAsync(ToSnapshot());
+            var snapshot = ToSnapshot();
+            await GrainFactory.GetGrain<IZoneGrain>(oldZoneKey).TransferOutAsync(snapshot);
+            await GrainFactory.GetGrain<IZoneGrain>(newZoneKey).MoveAsync(snapshot);
         }
         else
         {

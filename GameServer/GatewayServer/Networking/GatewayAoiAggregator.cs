@@ -259,9 +259,21 @@ public sealed class GatewayAoiAggregator : BackgroundService
                     continue;
                 }
 
+                RemovePendingSupersededUpserts(session.SessionId, filtered.AoiDelta);
                 await FlushPendingAsync(session.SessionId, cancellationToken);
                 await SendEnvelopeAsync(session, filtered, "reliable-aoi-send", cancellationToken);
             }
+        }
+
+        private void RemovePendingSupersededUpserts(string sessionId, AoiDelta? reliableDelta)
+        {
+            if (reliableDelta is not { Upserts.Count: > 0 }
+                || !_pendingBySession.TryGetValue(sessionId, out var pending))
+            {
+                return;
+            }
+
+            pending.RemoveUpsertsSupersededBy(reliableDelta.Upserts);
         }
 
         private async Task FlushSessionCommandAsync(SessionAoiCommand command, CancellationToken cancellationToken)
@@ -374,6 +386,12 @@ public sealed class GatewayAoiAggregator : BackgroundService
                     continue;
                 }
 
+                if (visibility.IsOlderThanKnown(upsert.EntityId, upsert.Version))
+                {
+                    continue;
+                }
+
+                visibility.RecordVersion(upsert.EntityId, upsert.Version);
                 var wasVisible = visibility.VisibleEntityIds.Contains(upsert.EntityId);
                 var radiusSquared = wasVisible ? _options.AoiExitRadiusSquared : _options.AoiEnterRadiusSquared;
                 // 이미 보이는 entity는 더 큰 exit 반경을 적용해 경계 흔들림을 줄인다.
@@ -549,6 +567,21 @@ public sealed class GatewayAoiAggregator : BackgroundService
     private sealed class SessionAoiVisibility
     {
         public HashSet<long> VisibleEntityIds { get; } = new();
+
+        private readonly Dictionary<long, long> _knownVersions = new();
+
+        public bool IsOlderThanKnown(long entityId, long version)
+            => _knownVersions.TryGetValue(entityId, out var knownVersion)
+                && version < knownVersion;
+
+        public void RecordVersion(long entityId, long version)
+        {
+            if (!_knownVersions.TryGetValue(entityId, out var knownVersion)
+                || version > knownVersion)
+            {
+                _knownVersions[entityId] = version;
+            }
+        }
     }
 
     private static IReadOnlyList<ServerResEnvelope> ToPackets(ServerResEnvelope envelope)
@@ -659,8 +692,26 @@ public sealed class GatewayAoiAggregator : BackgroundService
 
             foreach (var upsert in delta.Upserts)
             {
+                if (_upserts.TryGetValue(upsert.EntityId, out var current)
+                    && upsert.Version < current.Version)
+                {
+                    continue;
+                }
+
                 _removes.Remove(upsert.EntityId);
                 _upserts[upsert.EntityId] = upsert.Clone();
+            }
+        }
+
+        public void RemoveUpsertsSupersededBy(IEnumerable<PacketEntitySnapshot> upserts)
+        {
+            foreach (var upsert in upserts)
+            {
+                if (_upserts.TryGetValue(upsert.EntityId, out var current)
+                    && current.Version <= upsert.Version)
+                {
+                    _upserts.Remove(upsert.EntityId);
+                }
             }
         }
 

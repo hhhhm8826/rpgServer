@@ -64,6 +64,15 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         return Task.CompletedTask;
     }
 
+    public Task TransferOutAsync(EntitySnapshot entity)
+    {
+        var snapshot = entity.Clone();
+        _entities.Remove(snapshot.EntityId);
+        _pendingMoveUpserts.Remove(snapshot.EntityId);
+        // Zone 이동은 객체 소멸도 스폰도 아니므로 AOI 발행 없이 소유 목록만 정리함
+        return Task.CompletedTask;
+    }
+
     public async Task LeaveAsync(long entityId)
     {
         _entities.Remove(entityId);

@@ -166,8 +166,8 @@ public sealed class GatewayZoneEventRouter : BackgroundService
                 return;
             }
 
-            // Reliable AOI는 같은 Zone의 pending latest를 먼저 비워 순서를 보존하고 이후에 reliable 이벤트를 발행
-            RemoveReliableDeletesFromLatest(item.Channel, item.Envelope);
+            // Reliable AOI가 더 최신 상태를 담고 있으면 pending latest의 낮은 버전을 먼저 제거
+            RemoveReliableStateFromLatest(item.Channel, item.Envelope);
             await FlushLatestZoneAsync(item.Channel, cancellationToken);
             await DeliverReliableZoneEnvelopeAsync(item.Channel, item.Envelope, cancellationToken);
         }
@@ -260,12 +260,22 @@ public sealed class GatewayZoneEventRouter : BackgroundService
             await _aoiAggregator.EnqueueReliableZoneAsync(envelope, sessions, cancellationToken);
         }
 
-        private void RemoveReliableDeletesFromLatest(string channel, ServerResEnvelope envelope)
+        private void RemoveReliableStateFromLatest(string channel, ServerResEnvelope envelope)
         {
-            if (envelope.AoiDelta?.Removes.Count > 0
-                && _latestByZone.TryGetValue(channel, out var pending))
+            if (envelope.AoiDelta is not { } delta
+                || !_latestByZone.TryGetValue(channel, out var pending))
             {
-                pending.Remove(envelope.AoiDelta.Removes);
+                return;
+            }
+
+            if (delta.Removes.Count > 0)
+            {
+                pending.Remove(delta.Removes);
+            }
+
+            if (delta.Upserts.Count > 0)
+            {
+                pending.RemoveUpsertsSupersededBy(delta.Upserts);
             }
         }
 
@@ -322,8 +332,26 @@ public sealed class GatewayZoneEventRouter : BackgroundService
 
             foreach (var upsert in delta.Upserts)
             {
+                if (_upserts.TryGetValue(upsert.EntityId, out var current)
+                    && upsert.Version < current.Version)
+                {
+                    continue;
+                }
+
                 _removes.Remove(upsert.EntityId);
                 _upserts[upsert.EntityId] = upsert.Clone();
+            }
+        }
+
+        public void RemoveUpsertsSupersededBy(IEnumerable<PacketEntitySnapshot> upserts)
+        {
+            foreach (var upsert in upserts)
+            {
+                if (_upserts.TryGetValue(upsert.EntityId, out var current)
+                    && current.Version <= upsert.Version)
+                {
+                    _upserts.Remove(upsert.EntityId);
+                }
             }
         }
 

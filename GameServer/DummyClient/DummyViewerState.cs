@@ -14,8 +14,18 @@ internal sealed class DummyViewerState
     private readonly DummyOptions _options;
     private readonly DummyStats _stats;
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+    private readonly ConcurrentDictionary<long, long> _lastViewerUpsertTicks = new();
+    private readonly ConcurrentDictionary<long, long> _lastViewerRemoveTicks = new();
     private string _snapshotJson = "{}";
     private string _completionMessage = "";
+    private long _viewerAoiDeltas;
+    private long _viewerAoiUpserts;
+    private long _viewerAoiRemoves;
+    private long _viewerRemoveHits;
+    private long _viewerRemoveMisses;
+    private long _viewerRemoveAfterRecentUpsert;
+    private long _viewerUpsertAfterRecentRemove;
+    private int _viewerMaxEntities;
     private int _completed;
 
     public DummyViewerState(DummyOptions options, DummyStats stats)
@@ -50,9 +60,27 @@ internal sealed class DummyViewerState
             return;
         }
 
+        Interlocked.Increment(ref _viewerAoiDeltas);
         foreach (var remove in delta.Removes)
         {
-            _aoiEntities.TryRemove(remove, out _);
+            Interlocked.Increment(ref _viewerAoiRemoves);
+            var now = Stopwatch.GetTimestamp();
+            if (_lastViewerUpsertTicks.TryGetValue(remove, out var lastUpsert)
+                && IsRecent(lastUpsert, now, TimeSpan.FromSeconds(1)))
+            {
+                Interlocked.Increment(ref _viewerRemoveAfterRecentUpsert);
+            }
+
+            if (_aoiEntities.TryRemove(remove, out _))
+            {
+                Interlocked.Increment(ref _viewerRemoveHits);
+            }
+            else
+            {
+                Interlocked.Increment(ref _viewerRemoveMisses);
+            }
+
+            _lastViewerRemoveTicks[remove] = now;
         }
 
         foreach (var upsert in delta.Upserts)
@@ -60,6 +88,14 @@ internal sealed class DummyViewerState
             if (upsert.Position is null)
             {
                 continue;
+            }
+
+            Interlocked.Increment(ref _viewerAoiUpserts);
+            var now = Stopwatch.GetTimestamp();
+            if (_lastViewerRemoveTicks.TryGetValue(upsert.EntityId, out var lastRemove)
+                && IsRecent(lastRemove, now, TimeSpan.FromSeconds(1)))
+            {
+                Interlocked.Increment(ref _viewerUpsertAfterRecentRemove);
             }
 
             _aoiEntities[upsert.EntityId] = new DummyEntity(
@@ -70,6 +106,7 @@ internal sealed class DummyViewerState
                 Y: upsert.Position.Y,
                 Z: upsert.Position.Z,
                 Connected: true);
+            UpdateMaxEntities(_aoiEntities.Count);
         }
 
     }
@@ -95,6 +132,7 @@ internal sealed class DummyViewerState
         return new ViewerSnapshot(
             ObserveIndex: observer?.Index ?? 0,
             ViewRadius: _options.ViewRadius,
+            ViewExitRadius: Math.Max(_options.ViewRadius, _options.ViewExitRadius),
             CellSize: CellSizeMeters,
             RenderIntervalMs: Math.Clamp(_options.RenderIntervalMs, 200, 2000),
             ElapsedSec: _stopwatch.Elapsed.TotalSeconds,
@@ -102,6 +140,7 @@ internal sealed class DummyViewerState
             Completed: Volatile.Read(ref _completed) != 0,
             CompletionMessage: Volatile.Read(ref _completionMessage),
             Stats: new ViewerStats(_stats.ActiveConnected, _stats.PeakConnected, _stats.LoginAccepted, _stats.LoginRejected, _stats.SentMoves, _stats.MoveNty, _stats.AoiDeltas, _stats.Errors, _stats.LoginAttempts, _stats.LoginTimeouts, _stats.LastStatus, _stats.ErrorSummaries.Take(6).ToArray()),
+            Aoi: Diagnostics(),
             Observer: observer,
             CurrentZone: observer is null ? null : ToZone(observer),
             Entities: renderEntities,
@@ -110,14 +149,12 @@ internal sealed class DummyViewerState
 
     private ViewerEntity[] GetRenderEntities(DummyEntity observer)
     {
-        var radiusSquared = _options.ViewRadius * _options.ViewRadius;
         var entities = new List<ViewerEntity>();
         foreach (var entity in _aoiEntities.Values)
         {
             if (entity.UserDbId == observer.UserDbId
                 || !entity.Connected
-                || entity.MapId != observer.MapId
-                || DistanceSquared(entity, observer) > radiusSquared)
+                || entity.MapId != observer.MapId)
             {
                 continue;
             }
@@ -143,11 +180,31 @@ internal sealed class DummyViewerState
 
     private static int FloorToCell(float value) => (int)MathF.Floor(value / CellSizeMeters);
 
-    private static double DistanceSquared(DummyEntity a, DummyEntity b)
+    public ViewerAoiDiagnostics Diagnostics() => new(
+        Deltas: Interlocked.Read(ref _viewerAoiDeltas),
+        Upserts: Interlocked.Read(ref _viewerAoiUpserts),
+        Removes: Interlocked.Read(ref _viewerAoiRemoves),
+        RemoveHits: Interlocked.Read(ref _viewerRemoveHits),
+        RemoveMisses: Interlocked.Read(ref _viewerRemoveMisses),
+        RemoveAfterRecentUpsert: Interlocked.Read(ref _viewerRemoveAfterRecentUpsert),
+        UpsertAfterRecentRemove: Interlocked.Read(ref _viewerUpsertAfterRecentRemove),
+        CurrentEntities: _aoiEntities.Count,
+        MaxEntities: Volatile.Read(ref _viewerMaxEntities));
+
+    private static bool IsRecent(long thenTicks, long nowTicks, TimeSpan window)
+        => Stopwatch.GetElapsedTime(thenTicks, nowTicks) <= window;
+
+    private void UpdateMaxEntities(int current)
     {
-        var dx = a.X - b.X;
-        var dy = a.Y - b.Y;
-        return dx * dx + dy * dy;
+        while (true)
+        {
+            var previous = Volatile.Read(ref _viewerMaxEntities);
+            if (current <= previous
+                || Interlocked.CompareExchange(ref _viewerMaxEntities, current, previous) == previous)
+            {
+                return;
+            }
+        }
     }
 }
 
@@ -157,11 +214,14 @@ internal sealed record ViewerEntity(long UserDbId, float X, float Y, bool Connec
 
 internal sealed record ViewerStats(int Connected, int PeakConnected, long LoginAccepted, int LoginRejected, long SentMoves, long MoveNty, long AoiDeltas, long Errors, long LoginAttempts, long LoginTimeouts, string LastStatus, IReadOnlyCollection<ErrorSummary> ErrorSummaries);
 
+internal sealed record ViewerAoiDiagnostics(long Deltas, long Upserts, long Removes, long RemoveHits, long RemoveMisses, long RemoveAfterRecentUpsert, long UpsertAfterRecentRemove, int CurrentEntities, int MaxEntities);
+
 internal sealed record ViewerZone(string MapId, int CellX, int CellY, string Key);
 
 internal sealed record ViewerSnapshot(
     int ObserveIndex,
     float ViewRadius,
+    float ViewExitRadius,
     float CellSize,
     int RenderIntervalMs,
     double ElapsedSec,
@@ -169,6 +229,7 @@ internal sealed record ViewerSnapshot(
     bool Completed,
     string CompletionMessage,
     ViewerStats Stats,
+    ViewerAoiDiagnostics Aoi,
     DummyEntity? Observer,
     ViewerZone? CurrentZone,
     IReadOnlyCollection<ViewerEntity> Entities,

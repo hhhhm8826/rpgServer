@@ -171,6 +171,7 @@ Zone 이벤트는 `ServerDeliveryPolicy`에 따라 처리 경로가 나뉩니다
 - Gateway는 Zone delta를 세션별로 필터링하고 `LatestPerEntity` 정책 이벤트는 Zone hash partition과 session hash partition으로 나눠 200ms 단위로 묶어서 전송합니다.
 - `Reliable` 정책은 입장, 퇴장, 에러, 보상처럼 누락되면 안 되는 이벤트에 사용합니다.
 - `LatestPerEntity` 정책은 이동, 전투 상태 스냅샷처럼 중간 delta 손실이 허용되는 이벤트에 사용합니다. 같은 observer tick 안에서는 entity별 upsert를 최신값으로 덮어써 전송하며, 중간 경로보다 최신 상태 수렴을 우선합니다.
+- Zone 이동은 객체 제거가 아니므로 `AoiDelta.Removes`를 발행하지 않습니다. 실제 로그아웃/소멸만 reliable remove로 전달하고, Zone 이동은 latest-only 이동 AOI로 수렴시킵니다.
 - Viewer는 첫 번째 로그인 성공 유저를 관찰자를 사용하며 주변 유저와 Zone grid를 Canvas로 표시합니다.
 
 <br>
