@@ -4,8 +4,8 @@ using System.Text;
 
 internal static class DummyViewer
 {
-    // viewer 렌더링용 snapshot은 서버 AOI tick과 같은 200ms 주기로 갱신함
-    private static readonly TimeSpan SnapshotInterval = TimeSpan.FromMilliseconds(200);
+    // viewer 렌더링용 snapshot은 서버 상태 확인을 위해 100ms 주기로 갱신함
+    private static readonly TimeSpan SnapshotInterval = TimeSpan.FromMilliseconds(100);
 
     public static Task StartAsync(DummyViewerState state, string host, int port, CancellationToken cancellationToken)
     {

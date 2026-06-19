@@ -34,7 +34,7 @@ internal sealed class DummyOptions
 
     public float ViewExitRadius { get; init; } = 80f;
 
-    public int RenderIntervalMs { get; init; } = 200;
+    public int RenderIntervalMs { get; init; } = 100;
 
     public string GatewaySummary => Gateways.Count == 0
         ? $"{Host}:{Port}"
@@ -91,7 +91,7 @@ internal sealed class DummyOptions
             ViewerHost = values.GetValueOrDefault("viewer-host") ?? "127.0.0.1",
             ViewRadius = float.TryParse(values.GetValueOrDefault("view-radius"), out var viewRadius) ? viewRadius : 70f,
             ViewExitRadius = float.TryParse(values.GetValueOrDefault("view-exit-radius"), out var viewExitRadius) ? viewExitRadius : 80f,
-            RenderIntervalMs = int.TryParse(values.GetValueOrDefault("render-interval-ms"), out var renderIntervalMs) ? renderIntervalMs : 200
+            RenderIntervalMs = int.TryParse(values.GetValueOrDefault("render-interval-ms"), out var renderIntervalMs) ? renderIntervalMs : 100
         };
     }
 

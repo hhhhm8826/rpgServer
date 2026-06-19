@@ -144,7 +144,7 @@ public sealed class GatewayAoiAggregator : BackgroundService
         {
             try
             {
-                using var timer = new PeriodicTimer(_options.LatestEventTick);
+                using var timer = new PeriodicTimer(_options.SessionAoiTick);
                 var waitRead = _commands.Reader.WaitToReadAsync(stoppingToken).AsTask();
                 var waitTick = timer.WaitForNextTickAsync(stoppingToken).AsTask();
 
@@ -366,16 +366,19 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 Sequence = source.Sequence
             };
 
-            foreach (var remove in source.Removes)
+            for (var i = 0; i < source.Removes.Count; i++)
             {
+                var remove = source.Removes[i];
                 if (remove == session.UserDbId)
                 {
                     continue;
                 }
 
+                var reason = GatewayAoiAggregator.RemoveReasonAt(source, i);
                 if (visibility.VisibleEntityIds.Remove(remove))
                 {
                     delta.Removes.Add(remove);
+                    delta.RemoveReasons.Add(reason);
                 }
             }
 
@@ -408,6 +411,7 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 {
                     visibility.VisibleEntityIds.Remove(upsert.EntityId);
                     delta.Removes.Add(upsert.EntityId);
+                    delta.RemoveReasons.Add(AoiRemoveReason.OutOfView);
                 }
             }
 
@@ -584,6 +588,11 @@ public sealed class GatewayAoiAggregator : BackgroundService
         }
     }
 
+    private static AoiRemoveReason RemoveReasonAt(AoiDelta delta, int index)
+        => index >= 0 && index < delta.RemoveReasons.Count
+            ? delta.RemoveReasons[index]
+            : AoiRemoveReason.EntityRemoved;
+
     private static IReadOnlyList<ServerResEnvelope> ToPackets(ServerResEnvelope envelope)
     {
         if (envelope.AoiDelta is not { } delta)
@@ -594,18 +603,23 @@ public sealed class GatewayAoiAggregator : BackgroundService
         var packets = new List<ServerResEnvelope>();
         var current = CreateDeltaShell(delta);
 
-        foreach (var remove in delta.Removes)
+        for (var i = 0; i < delta.Removes.Count; i++)
         {
+            var remove = delta.Removes[i];
+            var reason = RemoveReasonAt(delta, i);
             current.Removes.Add(remove);
+            current.RemoveReasons.Add(reason);
             if (ToPacket(envelope, current).CalculateSize() <= ProtobufPacketCodec.MaxPacketSize)
             {
                 continue;
             }
 
             current.Removes.RemoveAt(current.Removes.Count - 1);
+            current.RemoveReasons.RemoveAt(current.RemoveReasons.Count - 1);
             FlushIfNotEmpty(envelope, current, packets);
             current = CreateDeltaShell(delta);
             current.Removes.Add(remove);
+            current.RemoveReasons.Add(reason);
         }
 
         foreach (var upsert in delta.Upserts)
@@ -657,7 +671,7 @@ public sealed class GatewayAoiAggregator : BackgroundService
     private sealed class PendingAoiDelta
     {
         private readonly Dictionary<long, PacketEntitySnapshot> _upserts = new();
-        private readonly HashSet<long> _removes = new();
+        private readonly Dictionary<long, AoiRemoveReason> _removes = new();
         private GatewaySession? _session;
         private string _sessionId = "";
         private long _userDbId;
@@ -684,10 +698,11 @@ public sealed class GatewayAoiAggregator : BackgroundService
             _sequence = Math.Max(_sequence, delta.Sequence);
             _deliveryPolicy = envelope.DeliveryPolicy;
 
-            foreach (var remove in delta.Removes)
+            for (var i = 0; i < delta.Removes.Count; i++)
             {
+                var remove = delta.Removes[i];
                 _upserts.Remove(remove);
-                _removes.Add(remove);
+                _removes[remove] = GatewayAoiAggregator.RemoveReasonAt(delta, i);
             }
 
             foreach (var upsert in delta.Upserts)
@@ -730,7 +745,11 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 Sequence = _sequence
             };
             delta.Upserts.AddRange(_upserts.Values.Select(x => x.Clone()));
-            delta.Removes.AddRange(_removes);
+            foreach (var remove in _removes)
+            {
+                delta.Removes.Add(remove.Key);
+                delta.RemoveReasons.Add(remove.Value);
+            }
 
             _upserts.Clear();
             _removes.Clear();

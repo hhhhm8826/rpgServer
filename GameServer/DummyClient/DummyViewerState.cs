@@ -18,6 +18,7 @@ internal sealed class DummyViewerState
     private readonly ConcurrentDictionary<long, long> _lastViewerRemoveTicks = new();
     private string _snapshotJson = "{}";
     private string _completionMessage = "";
+    private string _shutdownMessage = "";
     private long _viewerAoiDeltas;
     private long _viewerAoiUpserts;
     private long _viewerAoiRemoves;
@@ -27,6 +28,7 @@ internal sealed class DummyViewerState
     private long _viewerUpsertAfterRecentRemove;
     private int _viewerMaxEntities;
     private int _completed;
+    private int _shuttingDown;
 
     public DummyViewerState(DummyOptions options, DummyStats stats)
     {
@@ -115,6 +117,14 @@ internal sealed class DummyViewerState
     {
         Volatile.Write(ref _completionMessage, message);
         Volatile.Write(ref _completed, 1);
+        Volatile.Write(ref _shuttingDown, 0);
+        RefreshSnapshotJson();
+    }
+
+    public void MarkShuttingDown(string message)
+    {
+        Volatile.Write(ref _shutdownMessage, message);
+        Volatile.Write(ref _shuttingDown, 1);
         RefreshSnapshotJson();
     }
 
@@ -134,9 +144,11 @@ internal sealed class DummyViewerState
             ViewRadius: _options.ViewRadius,
             ViewExitRadius: Math.Max(_options.ViewRadius, _options.ViewExitRadius),
             CellSize: CellSizeMeters,
-            RenderIntervalMs: Math.Clamp(_options.RenderIntervalMs, 200, 2000),
+            RenderIntervalMs: Math.Clamp(_options.RenderIntervalMs, 100, 2000),
             ElapsedSec: _stopwatch.Elapsed.TotalSeconds,
             DurationSec: _options.Duration.TotalSeconds,
+            ShuttingDown: Volatile.Read(ref _shuttingDown) != 0,
+            ShutdownMessage: Volatile.Read(ref _shutdownMessage),
             Completed: Volatile.Read(ref _completed) != 0,
             CompletionMessage: Volatile.Read(ref _completionMessage),
             Stats: new ViewerStats(_stats.ActiveConnected, _stats.PeakConnected, _stats.LoginAccepted, _stats.LoginRejected, _stats.SentMoves, _stats.MoveNty, _stats.AoiDeltas, _stats.Errors, _stats.LoginAttempts, _stats.LoginTimeouts, _stats.LastStatus, _stats.ErrorSummaries.Take(6).ToArray()),
@@ -226,6 +238,8 @@ internal sealed record ViewerSnapshot(
     int RenderIntervalMs,
     double ElapsedSec,
     double DurationSec,
+    bool ShuttingDown,
+    string ShutdownMessage,
     bool Completed,
     string CompletionMessage,
     ViewerStats Stats,

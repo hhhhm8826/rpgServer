@@ -11,6 +11,17 @@ enum EntityKind {
   ENTITY_KIND_DROP_ITEM = 3;
 }
 
+enum AoiRemoveReason {
+  // 제거 사유가 명확하지 않음. 구버전 패킷 또는 방어용 기본값.
+  AoiRemoveReasonUnknown = 0;
+
+  // 관찰자 기준 AOI 시야 밖으로 나가 화면에서만 제거됨. 월드 객체는 유지됨.
+  AoiRemoveReasonOutOfView = 1;
+
+  // 로그아웃, despawn, 드랍 아이템 소멸처럼 월드에서 객체 자체가 제거됨.
+  AoiRemoveReasonEntityRemoved = 2;
+}
+
 // 서버와 클라이언트가 공통으로 사용하는 에러 사유 코드입니다.
 // C# 생성 코드와 원본 proto를 함께 찾기 쉽도록 enum value는 PascalCase로 유지합니다.
 enum ErrorCode {
@@ -78,6 +89,7 @@ message AoiDelta {
   int64 sequence = 4;
   repeated EntitySnapshot upserts = 5;
   repeated int64 removes = 6;
+  repeated AoiRemoveReason remove_reasons = 8;
 }
 
 message ReliableEvent {

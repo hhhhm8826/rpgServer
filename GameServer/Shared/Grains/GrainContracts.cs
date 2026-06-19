@@ -27,6 +27,8 @@ public interface IZoneGrain : IGrainWithStringKey
     Task TransferOutAsync(EntitySnapshot entity);
 
     Task LeaveAsync(long entityId);
+
+    Task<List<EntitySnapshot>> GetSnapshotAsync();
 }
 
 [GenerateSerializer]

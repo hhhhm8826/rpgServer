@@ -81,6 +81,14 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         await PublishAsync([], [entityId], ProtocolServerDeliveryPolicy.Reliable);
     }
 
+    public Task<List<EntitySnapshot>> GetSnapshotAsync()
+    {
+        var snapshot = _entities.Values
+            .Select(entity => entity.Clone())
+            .ToList();
+        return Task.FromResult(snapshot);
+    }
+
     private Task FlushPendingMovesAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -36,6 +36,8 @@ public sealed class GatewayOptions
 
     public int SessionAoiPartitionCount { get; set; } = 4;
 
+    public int SessionAoiTickMs { get; set; } = 100;
+
     public int SessionAoiQueueCapacity { get; set; } = 4096;
 
     public int SessionAoiSendConcurrency { get; set; } = 32;
@@ -66,6 +68,8 @@ public sealed class GatewayOptions
     public int NormalizedLatestEventPartitionCount => Math.Clamp(LatestEventPartitionCount, 1, 16);
 
     public int NormalizedSessionAoiPartitionCount => Math.Clamp(SessionAoiPartitionCount, 1, 16);
+
+    public TimeSpan SessionAoiTick => TimeSpan.FromMilliseconds(Math.Clamp(SessionAoiTickMs, 25, 1000));
 
     public int NormalizedSessionAoiQueueCapacity => Math.Max(1024, SessionAoiQueueCapacity);
 

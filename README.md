@@ -118,6 +118,7 @@ Zone 이벤트는 `ServerDeliveryPolicy`에 따라 처리 경로가 나뉩니다
 | `LatestEventPartitionCount` | 4 | latest-only Zone 이벤트 hash partition 수 |
 | `LatestEventProcessingBudgetMs` | 100 | Gateway 전체 latest-only Zone tick 처리 시간 예산. Zone partition 수로 나눠 적용 |
 | `SessionAoiPartitionCount` | 4 | 세션별 AOI 병합/전송 hash partition 수 |
+| `SessionAoiTickMs` | 100 | 세션별 pending AOI 전송 tick |
 | `SessionAoiQueueCapacity` | 4096 | 세션 AOI partition별 입력 큐 용량 |
 | `SessionAoiSendConcurrency` | 32 | latest-only AOI 전송 동시 실행 제한 |
 | `AoiEnterRadiusMeters` | 70 | AOI에 새로 진입한 것으로 판단하는 반경 |
@@ -168,7 +169,7 @@ Zone 이벤트는 `ServerDeliveryPolicy`에 따라 처리 경로가 나뉩니다
 - Gateway는 유저 위치 기준 현재 Zone과 주변 5x5 Zone을 구독합니다.
 - Zone 5x5는 후보 수집 범위이며, 실제 전송은 서버 확정 위치 기준 시야 반경 안의 엔티티만 포함합니다. 기본값은 진입 70m, 이탈 80m입니다.
 - `ZoneGrain`은 객체 목록 관리와 AOI delta 발행만 담당합니다.
-- Gateway는 Zone delta를 세션별로 필터링하고 `LatestPerEntity` 정책 이벤트는 Zone hash partition과 session hash partition으로 나눠 200ms 단위로 묶어서 전송합니다.
+- Gateway는 Zone delta를 세션별로 필터링하고 `LatestPerEntity` 정책 이벤트는 Zone hash partition에서 200ms 단위로, session hash partition에서 기본 100ms 단위로 묶어서 전송합니다.
 - `Reliable` 정책은 입장, 퇴장, 에러, 보상처럼 누락되면 안 되는 이벤트에 사용합니다.
 - `LatestPerEntity` 정책은 이동, 전투 상태 스냅샷처럼 중간 delta 손실이 허용되는 이벤트에 사용합니다. 같은 observer tick 안에서는 entity별 upsert를 최신값으로 덮어써 전송하며, 중간 경로보다 최신 상태 수렴을 우선합니다.
 - Zone 이동은 객체 제거가 아니므로 `AoiDelta.Removes`를 발행하지 않습니다. 실제 로그아웃/소멸만 reliable remove로 전달하고, Zone 이동은 latest-only 이동 AOI로 수렴시킵니다.
@@ -283,7 +284,7 @@ dotnet run --project GameServer\DummyClient\DummyClient.csproj -- --clients 1000
 
 DummyClient는 로그인 시작 전 지정한 Gateway TCP endpoint가 열릴 때까지 최대 30초 대기하며 `--gateway-ready-timeout`으로 조정할 수 있습니다.  
 
-기본적으로 5초마다 100명씩 로그인 시도를 시작합니다. Viewer 시야 반경은 70m입니다.  
+기본적으로 5초마다 100명씩 로그인 시도를 시작합니다. Viewer 시야 반경은 70m이고, 상태 snapshot은 기본 100ms마다 갱신합니다.  
 이동 요청은 클라이언트별로 100ms~500ms 랜덤 간격으로 전송되며, 이동량은 `6m/s * 실제 경과 시간`으로 계산합니다.  
 이동 방향은 70% 확률로 유지하고, 변경 시에는 현재 방향에서 최대 120도만 회전합니다.
 

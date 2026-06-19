@@ -305,7 +305,7 @@ public sealed class GatewayZoneEventRouter : BackgroundService
     private sealed class PendingLatestZoneDelta
     {
         private readonly Dictionary<long, PacketEntitySnapshot> _upserts = new();
-        private readonly HashSet<long> _removes = new();
+        private readonly Dictionary<long, AoiRemoveReason> _removes = new();
         private string _mapId = "default";
         private int _zoneX;
         private int _zoneY;
@@ -324,10 +324,11 @@ public sealed class GatewayZoneEventRouter : BackgroundService
             _zoneY = delta.ZoneY;
             _sequence = Math.Max(_sequence, delta.Sequence);
 
-            foreach (var remove in delta.Removes)
+            for (var i = 0; i < delta.Removes.Count; i++)
             {
+                var remove = delta.Removes[i];
                 _upserts.Remove(remove);
-                _removes.Add(remove);
+                _removes[remove] = RemoveReasonAt(delta, i);
             }
 
             foreach (var upsert in delta.Upserts)
@@ -381,7 +382,11 @@ public sealed class GatewayZoneEventRouter : BackgroundService
                 Sequence = _sequence
             };
             delta.Upserts.AddRange(_upserts.Values.Select(x => x.Clone()));
-            delta.Removes.AddRange(_removes);
+            foreach (var remove in _removes)
+            {
+                delta.Removes.Add(remove.Key);
+                delta.RemoveReasons.Add(remove.Value);
+            }
 
             _upserts.Clear();
             _removes.Clear();
@@ -394,5 +399,10 @@ public sealed class GatewayZoneEventRouter : BackgroundService
             };
             return true;
         }
+
+        private static AoiRemoveReason RemoveReasonAt(AoiDelta delta, int index)
+            => index >= 0 && index < delta.RemoveReasons.Count
+                ? delta.RemoveReasons[index]
+                : AoiRemoveReason.EntityRemoved;
     }
 }

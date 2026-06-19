@@ -2,7 +2,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 
-var completionNoticeHold = TimeSpan.FromSeconds(10);
+var shutdownNoticeHold = TimeSpan.FromSeconds(10);
+var completionNoticeHold = TimeSpan.FromSeconds(3);
 var options = DummyOptions.Parse(args);
 var stats = new DummyStats();
 var viewerState = new DummyViewerState(options, stats);
@@ -52,7 +53,8 @@ catch (OperationCanceledException)
 }
 
 stopwatch.Stop();
-viewerState.MarkCompleted($"Completed in {stopwatch.Elapsed:hh\\:mm\\:ss}. accepted={stats.LoginAccepted}, peak={stats.PeakConnected}, errors={stats.Errors}");
+var completionMessage = $"Completed in {stopwatch.Elapsed:hh\\:mm\\:ss}. accepted={stats.LoginAccepted}, peak={stats.PeakConnected}, errors={stats.Errors}";
+viewerState.MarkShuttingDown($"DummyClient 연결을 정리하는 중입니다. accepted={stats.LoginAccepted}, peak={stats.PeakConnected}, errors={stats.Errors}");
 Console.WriteLine($"Completed in {stopwatch.Elapsed}.");
 Console.WriteLine($"ActiveConnected={stats.ActiveConnected}, PeakConnected={stats.PeakConnected}, LoginAccepted={stats.LoginAccepted}, LoginAttempts={stats.LoginAttempts}, LoginRejected={stats.LoginRejected}, LoginTimeouts={stats.LoginTimeouts}, SentMoves={stats.SentMoves}, MoveNty={stats.MoveNty}, AoiDeltas={stats.AoiDeltas}, Errors={stats.Errors}");
 var viewerAoi = viewerState.Diagnostics();
@@ -64,6 +66,9 @@ foreach (var error in stats.ErrorSummaries)
 
 if (viewerTask is not null)
 {
+    Console.WriteLine($"Viewer shutdown notice stays visible for {shutdownNoticeHold.TotalSeconds:0}s.");
+    await Task.Delay(shutdownNoticeHold);
+    viewerState.MarkCompleted(completionMessage);
     Console.WriteLine($"Viewer completion notice stays visible for {completionNoticeHold.TotalSeconds:0}s.");
     await Task.Delay(completionNoticeHold);
 }

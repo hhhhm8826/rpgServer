@@ -107,6 +107,7 @@
         radial-gradient(circle at center, rgba(101, 214, 255, 0.08), transparent 34%),
         #101114;
     }
+    #shutdown,
     #completion {
       position: fixed;
       left: 50%;
@@ -122,14 +123,23 @@
       box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
       text-align: center;
     }
+    #shutdown {
+      border-color: rgba(244, 200, 106, 0.62);
+    }
+    #shutdown.visible,
     #completion.visible {
       display: block;
     }
+    #shutdown .title,
     #completion .title {
       color: #6ee7a8;
       font-size: 30px;
       font-weight: 800;
     }
+    #shutdown .title {
+      color: #f4c86a;
+    }
+    #shutdown .message,
     #completion .message {
       margin-top: 10px;
       color: #d6dae2;
@@ -145,6 +155,10 @@
     <div><span style="background:#ffcc4d"></span>observer</div>
     <div><span style="background:#65d6ff"></span>nearby dummy</div>
   </div>
+  <div id="shutdown">
+    <div class="title">테스트 종료 중</div>
+    <div class="message" id="shutdown-message"></div>
+  </div>
   <div id="completion">
     <div class="title">테스트 완료</div>
     <div class="message" id="completion-message"></div>
@@ -153,9 +167,11 @@
     const canvas = document.getElementById('view');
     const ctx = canvas.getContext('2d');
     const stats = document.getElementById('stats');
+    const shutdown = document.getElementById('shutdown');
+    const shutdownMessage = document.getElementById('shutdown-message');
     const completion = document.getElementById('completion');
     const completionMessage = document.getElementById('completion-message');
-    const defaultIntervalMs = 200;
+    const defaultIntervalMs = 100;
     let snapshot = null;
     let nearbyIds = new Set();
     let scale = 4;
@@ -203,7 +219,12 @@
     }
 
     function updateCompletion(value) {
+      const shuttingDown = Boolean(value?.shuttingDown);
       const done = Boolean(value?.completed);
+      shutdown.classList.toggle('visible', shuttingDown && !done);
+      shutdownMessage.textContent = shuttingDown && !done
+        ? (value?.shutdownMessage || 'DummyClient 연결을 정리하는 중입니다.')
+        : '';
       completion.classList.toggle('visible', done);
       completionMessage.textContent = done ? (value?.completionMessage || 'DummyClient 테스트가 종료됐습니다.') : '';
     }
@@ -380,6 +401,14 @@
           text: '완료',
           className: 'ok',
           description: 'DummyClient 테스트가 종료된 상태입니다.'
+        };
+      }
+
+      if (value?.shuttingDown) {
+        return {
+          text: '종료중',
+          className: 'warn',
+          description: 'DummyClient 테스트가 끝나고 연결과 Viewer를 정리하는 상태입니다.'
         };
       }
 

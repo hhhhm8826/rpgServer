@@ -2,16 +2,21 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using GameServer.GatewayServer.Sessions;
 using GameServer.Shared.EventBus;
+using GameServer.Shared.Grains;
 using GameServer.Shared.Protocol;
 using GameServer.Shared.World;
+using Orleans;
 using StackExchange.Redis;
 using PacketWorldPosition = GameServer.Shared.Protocol.WorldPosition;
+using ProtocolServerDeliveryPolicy = GameServer.Shared.Protocol.ServerDeliveryPolicy;
 
 namespace GameServer.GatewayServer.Networking;
 
 public sealed class GatewaySubscriptionManager : BackgroundService
 {
     private readonly EventBusRedisConnection _redis;
+    private readonly IGrainFactory _grainFactory;
+    private readonly GatewayAoiAggregator _aoiAggregator;
     private readonly ILogger<GatewaySubscriptionManager> _logger;
     private readonly Channel<SubscriptionCommand> _commands;
     private readonly Dictionary<string, int> _userSubscriptions = new(StringComparer.Ordinal);
@@ -24,9 +29,13 @@ public sealed class GatewaySubscriptionManager : BackgroundService
 
     public GatewaySubscriptionManager(
         EventBusRedisConnection redis,
+        IGrainFactory grainFactory,
+        GatewayAoiAggregator aoiAggregator,
         ILogger<GatewaySubscriptionManager> logger)
     {
         _redis = redis;
+        _grainFactory = grainFactory;
+        _aoiAggregator = aoiAggregator;
         _logger = logger;
         _commands = Channel.CreateUnbounded<SubscriptionCommand>(new UnboundedChannelOptions
         {
@@ -211,6 +220,11 @@ public sealed class GatewaySubscriptionManager : BackgroundService
             AddSessionToZoneIndex(zone, session);
         }
 
+        foreach (var zone in add)
+        {
+            QueueZoneSnapshot(zone, session);
+        }
+
         foreach (var zone in remove)
         {
             state.Zones.Remove(zone);
@@ -223,6 +237,85 @@ public sealed class GatewaySubscriptionManager : BackgroundService
         }
 
         state.CenterZoneKey = centerZoneKey;
+    }
+
+    private void QueueZoneSnapshot(string channel, GatewaySession session)
+    {
+        _ = Task.Run(
+            () => SendZoneSnapshotAsync(channel, session, CancellationToken.None),
+            CancellationToken.None);
+    }
+
+    private async Task SendZoneSnapshotAsync(string channel, GatewaySession session, CancellationToken cancellationToken)
+    {
+        if (!TryParseZoneChannel(channel, out var zone))
+        {
+            _logger.LogDebug("Skipped AOI snapshot for unrecognized zone channel {Channel}.", channel);
+            return;
+        }
+
+        try
+        {
+            var snapshots = await _grainFactory.GetGrain<IZoneGrain>(zone.ToKey())
+                .GetSnapshotAsync();
+            if (snapshots.Count == 0)
+            {
+                return;
+            }
+
+            var delta = new ZoneDelta
+            {
+                MapId = zone.MapId,
+                ZoneX = zone.CellX,
+                ZoneY = zone.CellY,
+                DeliveryPolicy = ProtocolServerDeliveryPolicy.Reliable
+            };
+            delta.Upserts.AddRange(snapshots.Select(entity => entity.Clone()));
+
+            var envelope = new ServerResEnvelope
+            {
+                Kind = ServerResKind.AoiDelta,
+                DeliveryPolicy = ServerDeliveryPolicy.Reliable,
+                AoiDelta = delta.ToPacketAoiDelta()
+            };
+
+            await _aoiAggregator.EnqueueReliableZoneAsync(envelope, [session], cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to send AOI snapshot for zone {Channel}, session {SessionId}, user {UserDbId}.",
+                channel,
+                session.SessionId,
+                session.UserDbId);
+        }
+    }
+
+    private static bool TryParseZoneChannel(string channel, out ZoneAddress zone)
+    {
+        zone = new ZoneAddress();
+        var parts = channel.Split(':', 5);
+        if (parts.Length != 5
+            || !string.Equals(parts[0], "gs", StringComparison.Ordinal)
+            || !string.Equals(parts[2], "zone", StringComparison.Ordinal)
+            || !int.TryParse(parts[3], out var cellX)
+            || !int.TryParse(parts[4], out var cellY))
+        {
+            return false;
+        }
+
+        zone = new ZoneAddress
+        {
+            MapId = parts[1],
+            CellX = cellX,
+            CellY = cellY
+        };
+        return true;
     }
 
     private async Task SubscribeUserAsync(long userDbId)
