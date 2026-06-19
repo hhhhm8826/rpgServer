@@ -20,6 +20,9 @@ enum AoiRemoveReason {
 
   // 로그아웃, despawn, 드랍 아이템 소멸처럼 월드에서 객체 자체가 제거됨.
   AoiRemoveReasonEntityRemoved = 2;
+
+  // Zone 이동으로 기존 Zone에서 빠져 observer 기준 시야 이탈 여부를 재검사해야 함.
+  AoiRemoveReasonZoneTransferCheck = 3;
 }
 
 // 서버와 클라이언트가 공통으로 사용하는 에러 사유 코드입니다.

@@ -49,7 +49,13 @@ public static class PacketConverters
 
         packet.Upserts.AddRange(delta.Upserts.Select(ToPacketEntitySnapshot));
         packet.Removes.AddRange(delta.Removes);
-        packet.RemoveReasons.AddRange(delta.Removes.Select(_ => AoiRemoveReason.EntityRemoved));
+        for (var i = 0; i < delta.Removes.Count; i++)
+        {
+            packet.RemoveReasons.Add(i < delta.RemoveReasons.Count
+                ? delta.RemoveReasons[i]
+                : AoiRemoveReason.EntityRemoved);
+        }
+
         return packet;
     }
 

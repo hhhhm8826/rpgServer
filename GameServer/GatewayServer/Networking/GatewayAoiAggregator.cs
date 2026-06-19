@@ -366,6 +366,7 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 Sequence = source.Sequence
             };
 
+            var zoneTransferChecks = GetZoneTransferCheckUpserts(source);
             for (var i = 0; i < source.Removes.Count; i++)
             {
                 var remove = source.Removes[i];
@@ -375,6 +376,27 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 }
 
                 var reason = GatewayAoiAggregator.RemoveReasonAt(source, i);
+                if (reason == AoiRemoveReason.ZoneTransferCheck)
+                {
+                    if (!zoneTransferChecks.TryGetValue(remove, out var transfer)
+                        || transfer.Position is null
+                        || visibility.IsOlderThanKnown(remove, transfer.Version))
+                    {
+                        continue;
+                    }
+
+                    visibility.RecordVersion(remove, transfer.Version);
+                    if (visibility.VisibleEntityIds.Contains(remove)
+                        && !IsInView(observerPosition, transfer.Position, _options.AoiExitRadiusSquared))
+                    {
+                        visibility.VisibleEntityIds.Remove(remove);
+                        delta.Removes.Add(remove);
+                        delta.RemoveReasons.Add(reason);
+                    }
+
+                    continue;
+                }
+
                 if (visibility.VisibleEntityIds.Remove(remove))
                 {
                     delta.Removes.Add(remove);
@@ -385,6 +407,11 @@ public sealed class GatewayAoiAggregator : BackgroundService
             foreach (var upsert in source.Upserts)
             {
                 if (upsert.EntityId == session.UserDbId || upsert.Position is null)
+                {
+                    continue;
+                }
+
+                if (zoneTransferChecks.ContainsKey(upsert.EntityId))
                 {
                     continue;
                 }
@@ -429,6 +456,41 @@ public sealed class GatewayAoiAggregator : BackgroundService
                 DeliveryPolicy = envelope.DeliveryPolicy,
                 AoiDelta = delta
             };
+        }
+
+        private static Dictionary<long, PacketEntitySnapshot> GetZoneTransferCheckUpserts(AoiDelta source)
+        {
+            var transferIds = new HashSet<long>();
+            for (var i = 0; i < source.Removes.Count; i++)
+            {
+                if (GatewayAoiAggregator.RemoveReasonAt(source, i) == AoiRemoveReason.ZoneTransferCheck)
+                {
+                    transferIds.Add(source.Removes[i]);
+                }
+            }
+
+            if (transferIds.Count == 0)
+            {
+                return [];
+            }
+
+            var result = new Dictionary<long, PacketEntitySnapshot>();
+            foreach (var upsert in source.Upserts)
+            {
+                if (!transferIds.Contains(upsert.EntityId)
+                    || upsert.Position is null)
+                {
+                    continue;
+                }
+
+                if (!result.TryGetValue(upsert.EntityId, out var current)
+                    || upsert.Version > current.Version)
+                {
+                    result[upsert.EntityId] = upsert;
+                }
+            }
+
+            return result;
         }
 
         private SessionAoiVisibility GetVisibility(string sessionId)

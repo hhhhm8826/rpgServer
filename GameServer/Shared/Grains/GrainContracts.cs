@@ -1,4 +1,5 @@
 using GameServer.Shared.World;
+using ProtocolAoiRemoveReason = GameServer.Shared.Protocol.AoiRemoveReason;
 using ProtocolErrorCode = GameServer.Shared.Protocol.ErrorCode;
 using ProtocolServerDeliveryPolicy = GameServer.Shared.Protocol.ServerDeliveryPolicy;
 using Orleans.Concurrency;
@@ -85,6 +86,9 @@ public sealed class ZoneDelta
 
     [Id(6)]
     public ProtocolServerDeliveryPolicy DeliveryPolicy { get; set; } = ProtocolServerDeliveryPolicy.Reliable;
+
+    [Id(7)]
+    public List<ProtocolAoiRemoveReason> RemoveReasons { get; set; } = [];
 }
 
 [GenerateSerializer]

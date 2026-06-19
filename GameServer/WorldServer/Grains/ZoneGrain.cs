@@ -3,6 +3,7 @@ using GameServer.Shared.World;
 using GameServer.WorldServer.EventBus;
 using Orleans;
 using Orleans.Runtime;
+using ProtocolAoiRemoveReason = GameServer.Shared.Protocol.AoiRemoveReason;
 using ProtocolServerDeliveryPolicy = GameServer.Shared.Protocol.ServerDeliveryPolicy;
 
 namespace GameServer.WorldServer.Grains;
@@ -69,8 +70,12 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         var snapshot = entity.Clone();
         _entities.Remove(snapshot.EntityId);
         _pendingMoveUpserts.Remove(snapshot.EntityId);
-        // Zone 이동은 객체 소멸도 스폰도 아니므로 AOI 발행 없이 소유 목록만 정리함
-        return Task.CompletedTask;
+        // Zone 이동은 제거가 아니라 observer별 AOI membership 재검사용 reliable 이벤트로 발행함
+        return PublishAsync(
+            [snapshot],
+            [snapshot.EntityId],
+            ProtocolServerDeliveryPolicy.Reliable,
+            [ProtocolAoiRemoveReason.ZoneTransferCheck]);
     }
 
     public async Task LeaveAsync(long entityId)
@@ -105,7 +110,11 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         return PublishAsync(upserts, [], ProtocolServerDeliveryPolicy.LatestPerEntity);
     }
 
-    private Task PublishAsync(List<EntitySnapshot> upserts, List<long> removes, ProtocolServerDeliveryPolicy deliveryPolicy)
+    private Task PublishAsync(
+        List<EntitySnapshot> upserts,
+        List<long> removes,
+        ProtocolServerDeliveryPolicy deliveryPolicy,
+        List<ProtocolAoiRemoveReason>? removeReasons = null)
     {
         var address = ParseAddress();
         var delta = new ZoneDelta
@@ -116,7 +125,8 @@ public sealed class ZoneGrain : Grain, IZoneGrain
             Sequence = ++_sequence,
             Upserts = upserts,
             Removes = removes,
-            DeliveryPolicy = deliveryPolicy
+            DeliveryPolicy = deliveryPolicy,
+            RemoveReasons = removeReasons ?? []
         };
 
         return _publisher.PublishZoneAsync(delta);
