@@ -57,8 +57,15 @@ public sealed class TcpGatewayService : BackgroundService
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                var client = await listener.AcceptTcpClientAsync(stoppingToken);
-                _ = Task.Run(() => HandleClientAsync(client, stoppingToken), CancellationToken.None);
+                try
+                {
+                    var client = await listener.AcceptTcpClientAsync(stoppingToken);
+                    _ = Task.Run(() => HandleClientAsync(client, stoppingToken), CancellationToken.None);
+                }
+                catch (SocketException ex) when (!stoppingToken.IsCancellationRequested)
+                {
+                    _logger.LogDebug(ex, "Gateway TCP accept failed; continuing listener loop.");
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
