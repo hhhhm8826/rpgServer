@@ -24,6 +24,8 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
     private IGrainTimer? _presenceInitializationTimer;
     private string _pendingPresenceSessionId = "";
     private long _pendingPresenceStateVersion;
+    private string _presenceInitializedSessionId = "";
+    private Task? _presenceInitializationTask;
     private bool _defaultSavePending;
     private bool _lowPrioritySavePending;
 
@@ -101,7 +103,10 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         State.Position = isNewUser
             ? command.SpawnPosition.Clone()
             : State.Position;
+        State.CurrentZoneKey = "";
         State.Version++;
+        _presenceInitializedSessionId = "";
+        _presenceInitializationTask = null;
         MarkDefaultSavePending();
 
         // 로그인 응답은 빠르게 반환하고 Zone 입장/AOI 초기화는 timer에서 처리함
@@ -171,7 +176,7 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
 
         try
         {
-            await EnterCurrentZoneAsync();
+            await EnsurePresenceInitializedAsync();
             MarkDefaultSavePending();
         }
         catch (Exception ex)
@@ -210,38 +215,61 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
             };
         }
 
-        var oldZoneKey = State.CurrentZoneKey;
-        State.Position = command.Position.Clone();
-        State.Version++;
+        await EnsurePresenceInitializedAsync();
 
-        var newZone = ZoneMath.FromPosition(State.Position);
-        var newZoneKey = newZone.ToKey();
+        var nextVersion = State.Version + 1;
+        var requestedPosition = command.Position.Clone();
+        var requestedZoneKey = ZoneMath.FromPosition(requestedPosition).ToKey();
+        // 현재 검증 정책이 비어 있어 같은 Zone 이동은 one-way로 Zone state에 반영하고 즉시 스냅샷을 갱신함.
+        // 검증을 만들어내면 ZoneGrain에 이동 처리가 직렬화되므로 분산 처리가 필요함
+        if (requestedZoneKey == State.CurrentZoneKey)
+        {
+            await SubmitSameZoneMoveAsync(nextVersion, requestedPosition);
+            State.Position = requestedPosition;
+            State.Version = nextVersion;
+            MarkLowPrioritySavePending();
 
-        // Zone 이동은 객체 제거가 아니므로 old zone remove를 발행하지 않음
-        if (string.IsNullOrWhiteSpace(oldZoneKey))
-        {
-            await GrainFactory.GetGrain<IZoneGrain>(newZoneKey).EnterAsync(ToSnapshot());
-        }
-        else if (oldZoneKey != newZoneKey)
-        {
-            var snapshot = ToSnapshot();
-            await GrainFactory.GetGrain<IZoneGrain>(oldZoneKey).TransferOutAsync(snapshot);
-            await GrainFactory.GetGrain<IZoneGrain>(newZoneKey).MoveAsync(snapshot);
-        }
-        else
-        {
-            await GrainFactory.GetGrain<IZoneGrain>(newZoneKey).MoveAsync(ToSnapshot());
+            return new MoveResult
+            {
+                Accepted = true,
+                ErrorCode = PacketErrorCode.None,
+                AuthoritativePosition = State.Position.Clone()
+            };
         }
 
-        State.CurrentZoneKey = newZoneKey;
+        var result = await GrainFactory.GetGrain<IZoneGrain>(State.CurrentZoneKey)
+            .MoveAsync(new ZoneMoveCommand
+            {
+                Entity = ToSnapshot(nextVersion),
+                RequestedPosition = requestedPosition
+            });
+
+        State.Position = result.AuthoritativePosition.Clone();
+        if (!string.IsNullOrWhiteSpace(result.AuthoritativeZoneKey))
+        {
+            State.CurrentZoneKey = result.AuthoritativeZoneKey;
+        }
+
+        State.Version = nextVersion;
         MarkLowPrioritySavePending();
 
         return new MoveResult
         {
-            Accepted = true,
-            ErrorCode = PacketErrorCode.None,
+            Accepted = result.Accepted,
+            ErrorCode = result.ErrorCode,
+            Message = result.Message,
             AuthoritativePosition = State.Position.Clone()
         };
+    }
+
+    private async Task SubmitSameZoneMoveAsync(long nextVersion, WorldPosition requestedPosition)
+    {
+        await GrainFactory.GetGrain<IZoneGrain>(State.CurrentZoneKey)
+            .SubmitMoveAsync(new ZoneMoveCommand
+            {
+                Entity = ToSnapshot(nextVersion),
+                RequestedPosition = requestedPosition.Clone()
+            });
     }
 
     public async Task LogoutAsync(LogoutCommand command)
@@ -262,6 +290,8 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         State.SessionId = "";
         State.GatewayId = "";
         State.CurrentZoneKey = "";
+        _presenceInitializedSessionId = "";
+        _presenceInitializationTask = null;
         State.Version++;
 
         // 로그아웃은 온라인 상태를 즉시 영속화해 재접속 시 ghost session 방지함
@@ -287,9 +317,45 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
 
     private async Task EnterCurrentZoneAsync()
     {
+        var sessionId = State.SessionId;
         var zone = ZoneMath.FromPosition(State.Position);
         State.CurrentZoneKey = zone.ToKey();
         await GrainFactory.GetGrain<IZoneGrain>(State.CurrentZoneKey).EnterAsync(ToSnapshot());
+        if (State.IsOnline && State.SessionId == sessionId)
+        {
+            _presenceInitializedSessionId = sessionId;
+        }
+    }
+
+    private async Task EnsurePresenceInitializedAsync()
+    {
+        if (_presenceInitializedSessionId == State.SessionId
+            && !string.IsNullOrWhiteSpace(State.CurrentZoneKey))
+        {
+            return;
+        }
+
+        CancelPresenceInitialization();
+        var initializationTask = _presenceInitializationTask;
+        if (initializationTask is null || initializationTask.IsCompleted)
+        {
+            initializationTask = EnterCurrentZoneAsync();
+            _presenceInitializationTask = initializationTask;
+        }
+
+        try
+        {
+            await initializationTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_presenceInitializationTask, initializationTask))
+            {
+                _presenceInitializationTask = null;
+            }
+        }
+
+        MarkDefaultSavePending();
     }
 
     private async Task ForceLogoutAfterPresenceInitializationFailureAsync(string sessionId, long stateVersion)
@@ -308,6 +374,8 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         State.SessionId = "";
         State.GatewayId = "";
         State.CurrentZoneKey = "";
+        _presenceInitializedSessionId = "";
+        _presenceInitializationTask = null;
         State.Version++;
 
         try
@@ -343,13 +411,16 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         });
     }
 
-    private EntitySnapshot ToSnapshot() => new()
+    private EntitySnapshot ToSnapshot()
+        => ToSnapshot(State.Version);
+
+    private EntitySnapshot ToSnapshot(long version) => new()
     {
         EntityId = State.UserDbId,
         Kind = EntityKind.User,
         DisplayName = State.UserDbId.ToString(),
         Position = State.Position.Clone(),
-        Version = State.Version
+        Version = version
     };
 
     private void MarkDefaultSavePending() => _defaultSavePending = true;

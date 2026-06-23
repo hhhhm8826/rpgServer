@@ -4,6 +4,7 @@ using GameServer.WorldServer.EventBus;
 using Orleans;
 using Orleans.Runtime;
 using ProtocolAoiRemoveReason = GameServer.Shared.Protocol.AoiRemoveReason;
+using ProtocolErrorCode = GameServer.Shared.Protocol.ErrorCode;
 using ProtocolServerDeliveryPolicy = GameServer.Shared.Protocol.ServerDeliveryPolicy;
 
 namespace GameServer.WorldServer.Grains;
@@ -56,16 +57,81 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         await PublishAsync([entity.Clone()], [], ProtocolServerDeliveryPolicy.Reliable);
     }
 
-    // 이동은 latest-only 이벤트라 중간 경로를 버리고 추후 클라이언트 보간에 맡김
-    public Task MoveAsync(EntitySnapshot entity)
+    public Task SubmitMoveAsync(ZoneMoveCommand command)
     {
-        var snapshot = entity.Clone();
-        _entities[entity.EntityId] = snapshot;
-        _pendingMoveUpserts[entity.EntityId] = snapshot.Clone();
-        return Task.CompletedTask;
+        // 같은 존을 이동할때 반영하는 경로. 동기 검증/승인이 필요해지면 이 메서드를 단순히 await 로 바꾸지 말고
+        // Zone 내부를 shard/sub-zone 등으로 검증 처리를 분산해야 병목을 피할 수 있음.
+        if (command.Entity.EntityId <= 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var targetZoneKey = ZoneMath.FromPosition(command.RequestedPosition).ToKey();
+        if (targetZoneKey != this.GetPrimaryKeyString())
+        {
+            return Task.CompletedTask;
+        }
+
+        var wasTracked = _entities.TryGetValue(command.Entity.EntityId, out var tracked);
+        var current = wasTracked
+            ? tracked!.Clone()
+            : command.Entity.Clone();
+        var authorization = AuthorizeMove(current, command.RequestedPosition);
+        if (!authorization.Accepted)
+        {
+            return Task.CompletedTask;
+        }
+
+        var snapshot = current.Clone();
+        snapshot.Position = authorization.AuthoritativePosition.Clone();
+        snapshot.Version = Math.Max(current.Version, command.Entity.Version);
+        return MoveWithinCurrentZoneAsync(snapshot, wasTracked);
+    }
+
+    public async Task<ZoneMoveResult> MoveAsync(ZoneMoveCommand command)
+    {
+        if (command.Entity.EntityId <= 0)
+        {
+            return RejectedMove(command.RequestedPosition.Clone(), this.GetPrimaryKeyString(), "Invalid entity id.");
+        }
+
+        var wasTracked = _entities.TryGetValue(command.Entity.EntityId, out var tracked);
+        var current = wasTracked
+            ? tracked!.Clone()
+            : command.Entity.Clone();
+        var authorization = AuthorizeMove(current, command.RequestedPosition);
+        if (!authorization.Accepted)
+        {
+            return RejectedMove(authorization.AuthoritativePosition, this.GetPrimaryKeyString(), authorization.Message);
+        }
+
+        var snapshot = current.Clone();
+        snapshot.Position = authorization.AuthoritativePosition.Clone();
+        snapshot.Version = Math.Max(current.Version, command.Entity.Version);
+
+        var targetZoneKey = ZoneMath.FromPosition(snapshot.Position).ToKey();
+        if (targetZoneKey == this.GetPrimaryKeyString())
+        {
+            await MoveWithinCurrentZoneAsync(snapshot, wasTracked);
+        }
+        else
+        {
+            await MoveToOtherZoneAsync(snapshot, targetZoneKey, wasTracked);
+        }
+
+        return new ZoneMoveResult
+        {
+            Accepted = true,
+            ErrorCode = ProtocolErrorCode.None,
+            AuthoritativePosition = snapshot.Position.Clone(),
+            AuthoritativeZoneKey = targetZoneKey
+        };
     }
 
     public Task TransferOutAsync(EntitySnapshot entity)
+        => TransferOutCoreAsync(entity);
+
+    private Task TransferOutCoreAsync(EntitySnapshot entity)
     {
         var snapshot = entity.Clone();
         _entities.Remove(snapshot.EntityId);
@@ -77,6 +143,62 @@ public sealed class ZoneGrain : Grain, IZoneGrain
             ProtocolServerDeliveryPolicy.Reliable,
             [ProtocolAoiRemoveReason.ZoneTransferCheck]);
     }
+
+    private async Task MoveWithinCurrentZoneAsync(EntitySnapshot snapshot, bool wasTracked)
+    {
+        _entities[snapshot.EntityId] = snapshot.Clone();
+        if (wasTracked)
+        {
+            // 이동은 latest-only 이벤트라 중간 경로를 버리고 추후 클라이언트 보간에 맡김
+            _pendingMoveUpserts[snapshot.EntityId] = snapshot.Clone();
+            return;
+        }
+
+        await PublishAsync([snapshot.Clone()], [], ProtocolServerDeliveryPolicy.Reliable);
+    }
+
+    private async Task MoveToOtherZoneAsync(EntitySnapshot snapshot, string targetZoneKey, bool wasTracked)
+    {
+        await GrainFactory.GetGrain<IZoneGrain>(targetZoneKey).EnterAsync(snapshot.Clone());
+        if (wasTracked)
+        {
+            await TransferOutCoreAsync(snapshot);
+            return;
+        }
+
+        _entities.Remove(snapshot.EntityId);
+        _pendingMoveUpserts.Remove(snapshot.EntityId);
+    }
+
+    private static MoveAuthorization AuthorizeMove(EntitySnapshot current, WorldPosition requested)
+    {
+        var authoritativePosition = requested.Clone();
+        if (!PassesTerrainAndMovementRules(current.Position, authoritativePosition))
+        {
+            return new MoveAuthorization(
+                Accepted: false,
+                AuthoritativePosition: current.Position.Clone(),
+                Message: "Move rejected by world movement rules.");
+        }
+
+        return new MoveAuthorization(
+            Accepted: true,
+            AuthoritativePosition: authoritativePosition,
+            Message: "");
+    }
+
+    private static bool PassesTerrainAndMovementRules(WorldPosition currentPosition, WorldPosition requestedPosition)
+        => true;
+
+    private static ZoneMoveResult RejectedMove(WorldPosition authoritativePosition, string zoneKey, string message)
+        => new()
+        {
+            Accepted = false,
+            ErrorCode = ProtocolErrorCode.WorldMoveRejected,
+            AuthoritativePosition = authoritativePosition.Clone(),
+            AuthoritativeZoneKey = zoneKey,
+            Message = message
+        };
 
     public async Task LeaveAsync(long entityId)
     {
@@ -150,4 +272,9 @@ public sealed class ZoneGrain : Grain, IZoneGrain
             CellY = cellY
         };
     }
+
+    private sealed record MoveAuthorization(
+        bool Accepted,
+        WorldPosition AuthoritativePosition,
+        string Message);
 }

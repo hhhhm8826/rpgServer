@@ -296,6 +296,12 @@ DummyClient는 로그인 시작 전 지정한 Gateway TCP endpoint가 열릴 때
 ![DummyClient Viewer](Docs/dummy-client-viewer.png) 
 
 ## TODO
-기획 데이터 로더  
-로그 시스템  
-기본적인 아이템 처리
+- 기획 데이터 로더  
+- 로그 시스템  
+- 기본적인 아이템 처리
+
+- 위치검증
+Gateway는 클라이언트 `MoveReq`를 받자마자 세션 위치나 Zone 구독을 변경하지 않습니다. World가 반환한 권위 위치를 기준으로만 갱신합니다.
+`UserGrain`의 위치는 스냅샷이며, AOI에 사용되는 런타임 위치는 `ZoneGrain`이 가집니다.
+현재 지형, 충돌, 속도 검증 정책이 비어 있으므로 같은 Zone 내부 이동은 one-way 경로로 Zone에 반영합니다.
+검증이 추가되었을 때 분산 처리 없이 단순히 one-way를 해제하고 모든 같은 Zone 이동을 `ZoneGrain`을 바꾸면, Zone 하나에 이동 처리가 직렬화되어 1000명 테스트에서 MoveNty 병목이 발생합니다.

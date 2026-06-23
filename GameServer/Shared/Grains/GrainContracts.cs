@@ -20,10 +20,15 @@ public interface IUserGrain : IGrainWithIntegerKey
 
 public interface IZoneGrain : IGrainWithStringKey
 {
+    [OneWay]
     Task EnterAsync(EntitySnapshot entity);
 
+    // 같은 Zone 이동은 현재 검증 정책이 비어 있어 OneWay로 반영함.
+    // 검증이 추가되면 ZoneGrain 직렬 병목을 피할 설계가 먼저 필요함
     [OneWay]
-    Task MoveAsync(EntitySnapshot entity);
+    Task SubmitMoveAsync(ZoneMoveCommand command);
+
+    Task<ZoneMoveResult> MoveAsync(ZoneMoveCommand command);
 
     Task TransferOutAsync(EntitySnapshot entity);
 
@@ -173,6 +178,35 @@ public sealed class MoveResult
     public WorldPosition AuthoritativePosition { get; set; } = new();
 
     [Id(3)]
+    public string Message { get; set; } = "";
+}
+
+[GenerateSerializer]
+public sealed class ZoneMoveCommand
+{
+    [Id(0)]
+    public EntitySnapshot Entity { get; set; } = new();
+
+    [Id(1)]
+    public WorldPosition RequestedPosition { get; set; } = new();
+}
+
+[GenerateSerializer]
+public sealed class ZoneMoveResult
+{
+    [Id(0)]
+    public bool Accepted { get; set; }
+
+    [Id(1)]
+    public ProtocolErrorCode ErrorCode { get; set; }
+
+    [Id(2)]
+    public WorldPosition AuthoritativePosition { get; set; } = new();
+
+    [Id(3)]
+    public string AuthoritativeZoneKey { get; set; } = "";
+
+    [Id(4)]
     public string Message { get; set; } = "";
 }
 

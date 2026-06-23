@@ -119,8 +119,6 @@ public sealed class GatewayMoveScheduler
     {
         try
         {
-            await UpdateSessionZonesIfChangedAsync(position, cancellationToken);
-
             var result = await _grainFactory.GetGrain<IUserGrain>(_session.UserDbId)
                 .MoveAsync(new MoveCommand
                 {
