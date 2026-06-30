@@ -56,12 +56,17 @@ stopwatch.Stop();
 var completionMessage = $"Completed in {stopwatch.Elapsed:hh\\:mm\\:ss}. accepted={stats.LoginAccepted}, peak={stats.PeakConnected}, errors={stats.Errors}";
 viewerState.MarkShuttingDown($"DummyClient 연결을 정리하는 중입니다. accepted={stats.LoginAccepted}, peak={stats.PeakConnected}, errors={stats.Errors}");
 Console.WriteLine($"Completed in {stopwatch.Elapsed}.");
-Console.WriteLine($"ActiveConnected={stats.ActiveConnected}, PeakConnected={stats.PeakConnected}, LoginAccepted={stats.LoginAccepted}, LoginAttempts={stats.LoginAttempts}, LoginRejected={stats.LoginRejected}, LoginTimeouts={stats.LoginTimeouts}, SentMoves={stats.SentMoves}, MoveNty={stats.MoveNty}, AoiDeltas={stats.AoiDeltas}, Errors={stats.Errors}");
+Console.WriteLine($"ActiveConnected={stats.ActiveConnected}, PeakConnected={stats.PeakConnected}, LoginAccepted={stats.LoginAccepted}, LoginAttempts={stats.LoginAttempts}, LoginRejected={stats.LoginRejected}, LoginTimeouts={stats.LoginTimeouts}, SentMoves={stats.SentMoves}, MoveNty={stats.MoveNty}, MoveRejected={stats.MoveRejected}, AoiDeltas={stats.AoiDeltas}, Errors={stats.Errors}");
 var viewerAoi = viewerState.Diagnostics();
 Console.WriteLine($"ViewerAoiDeltas={viewerAoi.Deltas}, ViewerAoiUpserts={viewerAoi.Upserts}, ViewerAoiRemoves={viewerAoi.Removes}, ViewerRemoveHits={viewerAoi.RemoveHits}, ViewerRemoveMisses={viewerAoi.RemoveMisses}, ViewerRemoveAfterRecentUpsert={viewerAoi.RemoveAfterRecentUpsert}, ViewerUpsertAfterRecentRemove={viewerAoi.UpsertAfterRecentRemove}, ViewerCurrentEntities={viewerAoi.CurrentEntities}, ViewerMaxEntities={viewerAoi.MaxEntities}");
 foreach (var error in stats.ErrorSummaries)
 {
     Console.WriteLine($"Error[{error.Count}] {error.Key}");
+}
+
+foreach (var reject in stats.MoveRejectSummaries)
+{
+    Console.WriteLine($"MoveReject[{reject.Count}] {reject.Key}");
 }
 
 if (viewerTask is not null)

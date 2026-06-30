@@ -98,9 +98,10 @@ internal static class DummyClientRunner
             }
 
             var position = login.Login.SpawnPosition;
+            var movementState = new DummyMovementState(position);
             viewerState.Upsert(index, userDbId, position, connected: true);
 
-            var reader = ReadLoopAsync(index, userDbId, stream, stats, viewerState, cancellationToken);
+            var reader = ReadLoopAsync(index, userDbId, stream, stats, viewerState, movementState, cancellationToken);
             if (index == 0)
             {
                 // 첫 번째 로그인이 성공하면 client는 관찰자로 고정하고 이동시키지 않음
@@ -153,10 +154,8 @@ internal static class DummyClientRunner
                 moveStopwatch.Restart();
                 var distance = MoveSpeedMetersPerSecond * elapsedSeconds;
 
-                // DummyClient는 송신 완료 후 다음 tick에서만 갱신하므로 protobuf 객체를 재사용해도 안전함
-                movePosition.X += directionX * distance;
-                movePosition.Y += directionY * distance;
-                movePosition.Z = 0;
+                // 서버 authoritative position을 기준으로 client 예측 위치를 전진시켜 경계 보정 후에도 이동 기준이 맞게 유지됨
+                movementState.AdvanceInto(movePosition, options.MapId, directionX, directionY, distance);
                 moveEnvelope.Sequence = sequence++;
 
                 await ProtobufPacketCodec.WriteAsync(stream, moveEnvelope, cancellationToken);
@@ -200,6 +199,7 @@ internal static class DummyClientRunner
         NetworkStream stream,
         DummyStats stats,
         DummyViewerState viewerState,
+        DummyMovementState movementState,
         CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -216,8 +216,17 @@ internal static class DummyClientRunner
                     stats.IncrementMoveNty();
                     if (envelope.Move is not null)
                     {
+                        if (!envelope.Move.Accepted)
+                        {
+                            stats.RecordMoveRejected(envelope.Move);
+                        }
+
                         // viewer 위치는 client 예측값이 아니라 서버가 확정한 위치만 사용함
-                        viewerState.Upsert(index, userDbId, envelope.Move.AuthoritativePosition, connected: true);
+                        if (envelope.Move.AuthoritativePosition is not null)
+                        {
+                            movementState.ApplyServerPosition(envelope.Move.AuthoritativePosition);
+                            viewerState.Upsert(index, userDbId, envelope.Move.AuthoritativePosition, connected: true);
+                        }
                     }
 
                     break;
@@ -239,4 +248,48 @@ internal static class DummyClientRunner
 
     private static TimeSpan RandomMoveDelay(Random random)
         => TimeSpan.FromMilliseconds(random.Next(MinMoveDelayMs, MaxMoveDelayMs + 1));
+
+    private sealed class DummyMovementState
+    {
+        private readonly object _gate = new();
+        private readonly WorldPosition _position;
+
+        public DummyMovementState(WorldPosition initialPosition)
+        {
+            _position = initialPosition.Clone();
+        }
+
+        public void ApplyServerPosition(WorldPosition position)
+        {
+            lock (_gate)
+            {
+                Copy(position, _position);
+            }
+        }
+
+        public void AdvanceInto(
+            WorldPosition target,
+            string mapId,
+            float directionX,
+            float directionY,
+            float distance)
+        {
+            lock (_gate)
+            {
+                _position.MapId = mapId;
+                _position.X += directionX * distance;
+                _position.Y += directionY * distance;
+                _position.Z = 0;
+                Copy(_position, target);
+            }
+        }
+
+        private static void Copy(WorldPosition source, WorldPosition target)
+        {
+            target.MapId = source.MapId;
+            target.X = source.X;
+            target.Y = source.Y;
+            target.Z = source.Z;
+        }
+    }
 }

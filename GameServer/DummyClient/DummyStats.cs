@@ -6,11 +6,13 @@ internal sealed class DummyStats
 {
     // 에러는 메시지별로 집계해 10건 이상 중단 같은 판단에 활용
     private readonly ConcurrentDictionary<string, long> _errorsByMessage = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _moveRejectsByMessage = new(StringComparer.Ordinal);
     private int _activeConnected;
     private int _peakConnected;
     private int _loginRejected;
     private long _sentMoves;
     private long _moveNty;
+    private long _moveRejected;
     private long _aoiDeltas;
     private long _errors;
     private long _loginAttempts;
@@ -30,6 +32,8 @@ internal sealed class DummyStats
 
     public long MoveNty => _moveNty;
 
+    public long MoveRejected => _moveRejected;
+
     public long AoiDeltas => _aoiDeltas;
 
     public long Errors => _errors;
@@ -41,6 +45,12 @@ internal sealed class DummyStats
     public string LastStatus => Volatile.Read(ref _lastStatus);
 
     public ErrorSummary[] ErrorSummaries => _errorsByMessage
+        .Select(x => new ErrorSummary(x.Key, x.Value))
+        .OrderByDescending(x => x.Count)
+        .ThenBy(x => x.Key, StringComparer.Ordinal)
+        .ToArray();
+
+    public ErrorSummary[] MoveRejectSummaries => _moveRejectsByMessage
         .Select(x => new ErrorSummary(x.Key, x.Value))
         .OrderByDescending(x => x.Count)
         .ThenBy(x => x.Key, StringComparer.Ordinal)
@@ -73,6 +83,18 @@ internal sealed class DummyStats
     public void IncrementSentMoves() => Interlocked.Increment(ref _sentMoves);
 
     public void IncrementMoveNty() => Interlocked.Increment(ref _moveNty);
+
+    public void RecordMoveRejected(MoveNty move)
+    {
+        Interlocked.Increment(ref _moveRejected);
+        var key = move.ErrorCode.ToString();
+        if (!string.IsNullOrWhiteSpace(move.Message))
+        {
+            key = $"{key}: {move.Message}";
+        }
+
+        _moveRejectsByMessage.AddOrUpdate(key, 1, static (_, current) => current + 1);
+    }
 
     public void IncrementAoiDeltas() => Interlocked.Increment(ref _aoiDeltas);
 

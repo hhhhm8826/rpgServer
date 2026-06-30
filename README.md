@@ -163,7 +163,8 @@ Zone 이벤트는 `ServerDeliveryPolicy`에 따라 처리 경로가 나뉩니다
 - 초과 요청은 `ErrorCode.LoginServerBusyRetry`로 거절되며 DummyClient는 재시도합니다.
 - `LoginReq`는 `user_db_id`를 전달하고, Gateway는 `UserDbId` 기준으로 `UserGrain.LoginAsync`를 직접 호출한 뒤 `LoginRes`를 즉시 TCP로 반환합니다.
 - 로그인 성공 후 Zone 입장 초기화는 WorldServer에서 비동기로 진행합니다. 실패하면 로그를 남기고 Gateway broadcast 채널로 `ErrorCode.LoginPresenceInitFailed`를 보내 해당 세션을 서버 측에서 닫습니다.
-- 이동 요청은 Gateway에서 200ms 단위로 coalescing 후 `UserGrain.MoveAsync`로 전달됩니다.
+- 이동 요청은 Gateway에서 200ms 단위로 세션별 최신 요청만 남긴 뒤 `UserGrain.MoveAsync`로 전달됩니다.
+- `UserGrain.MoveAsync`는 유저 단위 개인 이동 검증을 수행합니다. 좌표 유효성, map 일치, 속도 제한을 확인하고 허용 거리를 초과한 요청은 서버 위치로 보정합니다.
 - `MoveNty`는 Gateway가 `MoveAsync` 결과로 직접 TCP client에 전달합니다.
 
 <br>
@@ -173,7 +174,7 @@ Zone 이벤트는 `ServerDeliveryPolicy`에 따라 처리 경로가 나뉩니다
 - Zone 크기는 50m x 50m입니다.
 - Gateway는 유저 위치 기준 현재 Zone과 주변 5x5 Zone을 구독합니다.
 - Zone 5x5는 후보 수집 범위이며, 실제 전송은 서버 확정 위치 기준 시야 반경 안의 엔티티만 포함합니다. 기본값은 진입 70m, 이탈 80m입니다.
-- `ZoneGrain`은 객체 목록 관리와 AOI delta 발행만 담당합니다.
+- `ZoneGrain`은 객체 목록 관리와 AOI delta 발행만 담당하며, 이동 권한 검증은 `UserGrain`에서 처리합니다.
 - Gateway는 Zone delta를 세션별로 필터링하고 `LatestPerEntity` 정책 이벤트는 Zone hash partition에서 200ms 단위로, session hash partition에서 기본 100ms 단위로 묶어서 전송합니다.
 - `Reliable` 정책은 입장, 퇴장, 에러, 보상처럼 누락되면 안 되는 이벤트에 사용합니다.
 - `LatestPerEntity` 정책은 이동, 전투 상태 스냅샷처럼 중간 delta 손실이 허용되는 이벤트에 사용합니다. 같은 observer tick 안에서는 entity별 upsert를 최신값으로 덮어써 전송하며, 중간 경로보다 최신 상태 수렴을 우선합니다.
@@ -292,6 +293,7 @@ DummyClient는 로그인 시작 전 지정한 Gateway TCP endpoint가 열릴 때
 기본적으로 5초마다 100명씩 로그인 시도를 시작합니다. Viewer 시야 반경은 70m이고, 상태 snapshot은 기본 100ms마다 갱신합니다.  
 이동 요청은 클라이언트별로 100ms~500ms 랜덤 간격으로 전송되며, 이동량은 `6m/s * 실제 경과 시간`으로 계산합니다.  
 이동 방향은 70% 확률로 유지하고, 변경 시에는 현재 방향에서 최대 120도만 회전합니다.
+DummyClient는 서버가 보낸 `MoveNty.AuthoritativePosition`을 다음 이동 기준 위치로 반영하며, 이동 거절은 `MoveRejected` 지표로 집계합니다.
 
 ![DummyClient Viewer](Docs/dummy-client-viewer.png) 
 
@@ -299,9 +301,4 @@ DummyClient는 로그인 시작 전 지정한 Gateway TCP endpoint가 열릴 때
 - 기획 데이터 로더  
 - 로그 시스템  
 - 기본적인 아이템 처리
-
-- 위치검증
-Gateway는 클라이언트 `MoveReq`를 받자마자 세션 위치나 Zone 구독을 변경하지 않습니다. World가 반환한 권위 위치를 기준으로만 갱신합니다.
-`UserGrain`의 위치는 스냅샷이며, AOI에 사용되는 런타임 위치는 `ZoneGrain`이 가집니다.
-현재 지형, 충돌, 속도 검증 정책이 비어 있으므로 같은 Zone 내부 이동은 one-way 경로로 Zone에 반영합니다.
-검증이 추가되었을 때 분산 처리 없이 단순히 one-way를 해제하고 모든 같은 Zone 이동을 `ZoneGrain`을 바꾸면, Zone 하나에 이동 처리가 직렬화되어 1000명 테스트에서 MoveNty 병목이 발생합니다.
+- 지형/충돌 기반 이동 검증 확장

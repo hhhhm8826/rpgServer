@@ -23,8 +23,7 @@ public interface IZoneGrain : IGrainWithStringKey
     [OneWay]
     Task EnterAsync(EntitySnapshot entity);
 
-    // 같은 Zone 이동은 현재 검증 정책이 비어 있어 OneWay로 반영함.
-    // 검증이 추가되면 ZoneGrain 직렬 병목을 피할 설계가 먼저 필요함
+    // 같은 Zone 이동은 UserGrain에서 개인 검증이 끝난 위치만 OneWay로 반영함.
     [OneWay]
     Task SubmitMoveAsync(ZoneMoveCommand command);
 

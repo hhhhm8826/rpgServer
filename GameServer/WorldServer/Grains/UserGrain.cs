@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using GameServer.Shared.Grains;
 using GameServer.Shared.World;
 using GameServer.WorldServer.EventBus;
@@ -14,6 +15,10 @@ namespace GameServer.WorldServer.Grains;
 
 public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
 {
+    private const double MaxPersonalMoveSpeedMetersPerSecond = 12.0;
+    private const double MoveDistanceSlackMeters = 1.0;
+    private const double MaxMoveElapsedSeconds = 2.0;
+
     private readonly WorldStorageOptions _storageOptions;
     private readonly WorldEventBusPublisher _publisher;
     private readonly ILogger<UserGrain> _logger;
@@ -28,6 +33,7 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
     private Task? _presenceInitializationTask;
     private bool _defaultSavePending;
     private bool _lowPrioritySavePending;
+    private long _lastMoveValidationTimestamp;
 
     public UserGrain(
         WriteBehindGrainStorage storage,
@@ -107,6 +113,7 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         State.Version++;
         _presenceInitializedSessionId = "";
         _presenceInitializationTask = null;
+        MarkPersonalMoveValidated();
         MarkDefaultSavePending();
 
         // 로그인 응답은 빠르게 반환하고 Zone 입장/AOI 초기화는 timer에서 처리함
@@ -217,16 +224,29 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
 
         await EnsurePresenceInitializedAsync();
 
-        var nextVersion = State.Version + 1;
+        if (command.Position is null)
+        {
+            return RejectedMove("Move position is missing.");
+        }
+
+        var requestTimestamp = Stopwatch.GetTimestamp();
         var requestedPosition = command.Position.Clone();
-        var requestedZoneKey = ZoneMath.FromPosition(requestedPosition).ToKey();
-        // 현재 검증 정책이 비어 있어 같은 Zone 이동은 one-way로 Zone state에 반영하고 즉시 스냅샷을 갱신함.
-        // 검증을 만들어내면 ZoneGrain에 이동 처리가 직렬화되므로 분산 처리가 필요함
+        var validation = ValidatePersonalMove(requestedPosition, requestTimestamp);
+        if (!validation.Accepted)
+        {
+            return RejectedMove(validation.Message);
+        }
+
+        var authoritativePosition = validation.AuthoritativePosition;
+        var nextVersion = State.Version + 1;
+        var requestedZoneKey = ZoneMath.FromPosition(authoritativePosition).ToKey();
+        // 개인 이동검증은 UserGrain에서 끝내고 Zone은 state/AOI 반영만 담당함
         if (requestedZoneKey == State.CurrentZoneKey)
         {
-            await SubmitSameZoneMoveAsync(nextVersion, requestedPosition);
-            State.Position = requestedPosition;
+            await SubmitSameZoneMoveAsync(nextVersion, authoritativePosition);
+            State.Position = authoritativePosition;
             State.Version = nextVersion;
+            MarkPersonalMoveValidated(requestTimestamp);
             MarkLowPrioritySavePending();
 
             return new MoveResult
@@ -241,8 +261,19 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
             .MoveAsync(new ZoneMoveCommand
             {
                 Entity = ToSnapshot(nextVersion),
-                RequestedPosition = requestedPosition
+                RequestedPosition = authoritativePosition
             });
+
+        if (!result.Accepted)
+        {
+            return new MoveResult
+            {
+                Accepted = false,
+                ErrorCode = result.ErrorCode,
+                Message = result.Message,
+                AuthoritativePosition = State.Position.Clone()
+            };
+        }
 
         State.Position = result.AuthoritativePosition.Clone();
         if (!string.IsNullOrWhiteSpace(result.AuthoritativeZoneKey))
@@ -251,6 +282,7 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         }
 
         State.Version = nextVersion;
+        MarkPersonalMoveValidated(requestTimestamp);
         MarkLowPrioritySavePending();
 
         return new MoveResult
@@ -292,6 +324,7 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         State.CurrentZoneKey = "";
         _presenceInitializedSessionId = "";
         _presenceInitializationTask = null;
+        _lastMoveValidationTimestamp = 0;
         State.Version++;
 
         // 로그아웃은 온라인 상태를 즉시 영속화해 재접속 시 ghost session 방지함
@@ -314,6 +347,77 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
             await WriteCriticalStateAsync();
         }
     }
+
+    private MoveValidation ValidatePersonalMove(WorldPosition requestedPosition, long requestTimestamp)
+    {
+        if (!IsFinite(requestedPosition))
+        {
+            return MoveValidation.Rejected(State.Position, "Move position contains an invalid coordinate.");
+        }
+
+        if (!string.Equals(State.Position.MapId, requestedPosition.MapId, StringComparison.Ordinal))
+        {
+            return MoveValidation.Rejected(State.Position, "Move map does not match current map.");
+        }
+
+        if (_lastMoveValidationTimestamp <= 0)
+        {
+            return MoveValidation.Accept(requestedPosition);
+        }
+
+        var elapsedSeconds = Math.Clamp(
+            Stopwatch.GetElapsedTime(_lastMoveValidationTimestamp, requestTimestamp).TotalSeconds,
+            0,
+            MaxMoveElapsedSeconds);
+        var allowedDistance = MaxPersonalMoveSpeedMetersPerSecond * elapsedSeconds + MoveDistanceSlackMeters;
+        var allowedDistanceSquared = allowedDistance * allowedDistance;
+
+        if (State.Position.DistanceSquared2D(requestedPosition) > allowedDistanceSquared)
+        {
+            return MoveValidation.Accept(ClampMoveToAllowedDistance(requestedPosition, allowedDistance));
+        }
+
+        return MoveValidation.Accept(requestedPosition);
+    }
+
+    private WorldPosition ClampMoveToAllowedDistance(WorldPosition requestedPosition, double allowedDistance)
+    {
+        var dx = requestedPosition.X - State.Position.X;
+        var dy = requestedPosition.Y - State.Position.Y;
+        var distance = Math.Sqrt((double)dx * dx + (double)dy * dy);
+        if (distance <= 0)
+        {
+            return State.Position.Clone();
+        }
+
+        var scale = Math.Min(1.0, allowedDistance / distance);
+        return new WorldPosition
+        {
+            MapId = State.Position.MapId,
+            X = State.Position.X + (float)(dx * scale),
+            Y = State.Position.Y + (float)(dy * scale),
+            Z = requestedPosition.Z
+        };
+    }
+
+    private static bool IsFinite(WorldPosition position)
+        => float.IsFinite(position.X)
+            && float.IsFinite(position.Y)
+            && float.IsFinite(position.Z);
+
+    private MoveResult RejectedMove(string message) => new()
+    {
+        Accepted = false,
+        ErrorCode = PacketErrorCode.WorldMoveRejected,
+        Message = message,
+        AuthoritativePosition = State.Position.Clone()
+    };
+
+    private void MarkPersonalMoveValidated(long timestamp)
+        => _lastMoveValidationTimestamp = timestamp;
+
+    private void MarkPersonalMoveValidated()
+        => MarkPersonalMoveValidated(Stopwatch.GetTimestamp());
 
     private async Task EnterCurrentZoneAsync()
     {
@@ -376,6 +480,7 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
         State.CurrentZoneKey = "";
         _presenceInitializedSessionId = "";
         _presenceInitializationTask = null;
+        _lastMoveValidationTimestamp = 0;
         State.Version++;
 
         try
@@ -464,5 +569,14 @@ public sealed class UserGrain : WriteBehindGrainBase<UserState>, IUserGrain
     {
         _defaultSavePending = false;
         _lowPrioritySavePending = false;
+    }
+
+    private readonly record struct MoveValidation(bool Accepted, WorldPosition AuthoritativePosition, string Message)
+    {
+        public static MoveValidation Accept(WorldPosition authoritativePosition)
+            => new(true, authoritativePosition, "");
+
+        public static MoveValidation Rejected(WorldPosition authoritativePosition, string message)
+            => new(false, authoritativePosition.Clone(), message);
     }
 }

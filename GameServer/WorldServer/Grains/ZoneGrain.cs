@@ -59,8 +59,7 @@ public sealed class ZoneGrain : Grain, IZoneGrain
 
     public Task SubmitMoveAsync(ZoneMoveCommand command)
     {
-        // 같은 존을 이동할때 반영하는 경로. 동기 검증/승인이 필요해지면 이 메서드를 단순히 await 로 바꾸지 말고
-        // Zone 내부를 shard/sub-zone 등으로 검증 처리를 분산해야 병목을 피할 수 있음.
+        // 개인 이동검증은 UserGrain에서 끝내고 Zone은 같은 Zone state/AOI만 반영함.
         if (command.Entity.EntityId <= 0)
         {
             return Task.CompletedTask;
@@ -76,14 +75,9 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         var current = wasTracked
             ? tracked!.Clone()
             : command.Entity.Clone();
-        var authorization = AuthorizeMove(current, command.RequestedPosition);
-        if (!authorization.Accepted)
-        {
-            return Task.CompletedTask;
-        }
 
         var snapshot = current.Clone();
-        snapshot.Position = authorization.AuthoritativePosition.Clone();
+        snapshot.Position = command.RequestedPosition.Clone();
         snapshot.Version = Math.Max(current.Version, command.Entity.Version);
         return MoveWithinCurrentZoneAsync(snapshot, wasTracked);
     }
@@ -99,14 +93,9 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         var current = wasTracked
             ? tracked!.Clone()
             : command.Entity.Clone();
-        var authorization = AuthorizeMove(current, command.RequestedPosition);
-        if (!authorization.Accepted)
-        {
-            return RejectedMove(authorization.AuthoritativePosition, this.GetPrimaryKeyString(), authorization.Message);
-        }
 
         var snapshot = current.Clone();
-        snapshot.Position = authorization.AuthoritativePosition.Clone();
+        snapshot.Position = command.RequestedPosition.Clone();
         snapshot.Version = Math.Max(current.Version, command.Entity.Version);
 
         var targetZoneKey = ZoneMath.FromPosition(snapshot.Position).ToKey();
@@ -169,26 +158,6 @@ public sealed class ZoneGrain : Grain, IZoneGrain
         _entities.Remove(snapshot.EntityId);
         _pendingMoveUpserts.Remove(snapshot.EntityId);
     }
-
-    private static MoveAuthorization AuthorizeMove(EntitySnapshot current, WorldPosition requested)
-    {
-        var authoritativePosition = requested.Clone();
-        if (!PassesTerrainAndMovementRules(current.Position, authoritativePosition))
-        {
-            return new MoveAuthorization(
-                Accepted: false,
-                AuthoritativePosition: current.Position.Clone(),
-                Message: "Move rejected by world movement rules.");
-        }
-
-        return new MoveAuthorization(
-            Accepted: true,
-            AuthoritativePosition: authoritativePosition,
-            Message: "");
-    }
-
-    private static bool PassesTerrainAndMovementRules(WorldPosition currentPosition, WorldPosition requestedPosition)
-        => true;
 
     private static ZoneMoveResult RejectedMove(WorldPosition authoritativePosition, string zoneKey, string message)
         => new()
@@ -272,9 +241,4 @@ public sealed class ZoneGrain : Grain, IZoneGrain
             CellY = cellY
         };
     }
-
-    private sealed record MoveAuthorization(
-        bool Accepted,
-        WorldPosition AuthoritativePosition,
-        string Message);
 }

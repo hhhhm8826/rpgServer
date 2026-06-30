@@ -143,9 +143,8 @@ public sealed class GatewayMoveScheduler
             };
 
             _session.UpdatePosition(envelope.Move.AuthoritativePosition);
-            await UpdateSessionZonesIfChangedAsync(envelope.Move.AuthoritativePosition, cancellationToken);
-
             await _session.SendAsync(envelope, cancellationToken);
+            await UpdateSessionZonesIfChangedAsync(envelope.Move.AuthoritativePosition, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
